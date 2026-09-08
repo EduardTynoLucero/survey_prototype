@@ -57,7 +57,7 @@ module.exports = {
      Si el telefono esta en la misma red Wi-Fi, la IP local funciona.
      Para abrirlo desde fuera use un tunel (ngrok, cloudflared) y
      arranque asi:  set BASE_URL=https://xxxx.ngrok.io  &&  npm start */
-  BASE_URL: process.env.BASE_URL || `http://${IP}:${PUERTO}`,
+  BASE_URL: process.env.BASE_URL || `https://survey.digitallabsgt.com`,
 
   /* Cada cuanto revisa la agenda si toca generar o cerrar (segundos) */
   INTERVALO_AGENDA: 20,

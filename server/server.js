@@ -19,6 +19,10 @@ const agenda = require("./agenda");
 
 const RAIZ = path.join(__dirname, "..");
 
+/* Se pone en false si no se puede escribir en data/: el healthcheck falla
+   y el panel de Dokploy marca el contenedor como no saludable. */
+let sano = true;
+
 const TIPOS = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -87,6 +91,9 @@ async function api(req, res, ruta, consulta) {
 
   /* ---- estado general ---- */
   if (partes[1] === "estado" && req.method === "GET") {
+    if (!sano) {
+      return json(res, { error: "El servidor no puede escribir en data/. Revise el volumen." }, 503);
+    }
     return json(res, {
       whatsapp: {
         disponible: whatsapp.estado.disponible,
@@ -281,8 +288,23 @@ const servidor = http.createServer(async (req, res) => {
   }
 });
 
+function verificarEscritura() {
+  try {
+    db.cargar();
+    return true;
+  } catch (error) {
+    console.log("\n  ✖ NO SE PUEDE ESCRIBIR EN data/");
+    console.log(`     ${error.message}`);
+    console.log("     El contenedor corre como usuario 'node' (uid 1000). Si montó un");
+    console.log("     volumen sobre /app/data, use un volumen con nombre (Volume Mount),");
+    console.log("     no un bind mount a una carpeta del servidor. Si tiene que ser bind:");
+    console.log("        sudo chown -R 1000:1000 <carpeta-del-host>\n");
+    return false;
+  }
+}
+
 servidor.listen(config.PUERTO, () => {
-  db.cargar();
+  sano = verificarEscritura();
   console.log("\n==============================================");
   console.log("  MOTOR DE ENCUESTAS — Digital Labs");
   console.log("==============================================");
@@ -298,6 +320,7 @@ servidor.listen(config.PUERTO, () => {
     console.log("  ⚠  BASE_URL no es pública: los enlaces que se envíen por WhatsApp");
     console.log("     no se podrán abrir desde fuera. Defina BASE_URL con su dominio.\n");
   }
+  if (!sano) return;
   agenda.iniciar();
   whatsapp.conectar();
 });
