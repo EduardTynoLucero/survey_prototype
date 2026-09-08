@@ -1,0 +1,39 @@
+# =====================================================================
+#  Motor de Encuestas – Digital Labs
+#  Levantar:   docker compose up -d --build
+#  Ver logs:   docker compose logs -f
+#  Detener:    docker compose down          (los datos se conservan)
+# =====================================================================
+services:
+  encuestas:
+    build: .
+    image: motor-encuestas:1.0
+    container_name: motor-encuestas
+    restart: unless-stopped
+
+    ports:
+      - "3000:3000"
+
+    env_file:
+      - .env
+
+    # Chromium necesita memoria compartida; sin esto whatsapp-web.js
+    # se cae al abrir la sesión. No hace falta si usa la API de Meta.
+    shm_size: "1gb"
+
+    volumes:
+      # Encuestas, envíos, respuestas y bitácora
+      - encuestas-datos:/app/data
+      # Sesión de WhatsApp: sin este volumen habría que escanear el QR
+      # cada vez que se reinicia el contenedor
+      - encuestas-sesion:/app/server/auth-wweb
+      - encuestas-sesion-baileys:/app/server/auth
+
+    # Si prefiere ver los archivos desde el servidor, cambie el primer
+    # volumen por un bind mount y ajuste el dueño de la carpeta:
+    #   - ./data:/app/data        y luego:  sudo chown -R 1000:1000 ./data
+
+volumes:
+  encuestas-datos:
+  encuestas-sesion:
+  encuestas-sesion-baileys:

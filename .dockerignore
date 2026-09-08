@@ -1,0 +1,13 @@
+node_modules
+npm-debug.log*
+data
+server/auth
+server/auth-wweb
+.env
+.git
+.gitignore
+*.log
+iniciar.bat
+Dockerfile
+docker-compose.yml
+.dockerignore

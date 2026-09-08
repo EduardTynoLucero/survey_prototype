@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Motor de Encuestas Digital Labs</title>
+  <link rel="stylesheet" href="privado/admin.css">
+</head>
+<body class="portal-body">
+  <header class="portal-top">
+    <a class="portal-brand" href="index.html" aria-label="Digital Labs">
+      <img src="assets/LOGO_DLABS2.png" alt="Digital Labs">
+    </a>
+    <span>Motor de encuestas</span>
+  </header>
+
+  <main class="portal-main">
+    <section class="portal-hero">
+      <p>Prototipo funcional</p>
+      <h1>Encuestas internas y externas con envío real por WhatsApp</h1>
+      <span>El servidor guarda las encuestas, ejecuta el JOB mensual y manda el enlace individual a cada doctor. La vista previa es la encuesta real.</span>
+    </section>
+
+    <section class="portal-grid" aria-label="Entradas del prototipo">
+      <a class="portal-card primary" href="privado/index.html">
+        <small>Sistema privado</small>
+        <b>Constructor de encuestas</b>
+        <span>Asistente de 5 pasos, editor tipo Forms, agenda, envíos por WhatsApp y respuestas en vivo.</span>
+      </a>
+      <a class="portal-card" href="doctor/index.html">
+        <small>Vista pública</small>
+        <b>Responder encuesta</b>
+        <span>La encuesta tal como la abre el doctor desde el enlace de WhatsApp.</span>
+      </a>
+    </section>
+
+    <section class="portal-steps">
+      <b>Para que funcione el envío por WhatsApp</b>
+      <ol>
+        <li>Abra una terminal en esta carpeta y ejecute <code>cd server</code> y <code>npm install</code> (solo la primera vez).</li>
+        <li>Ejecute <code>npm start</code> y entre a <b>http://localhost:3000/privado/</b></li>
+        <li>Vaya a <b>WhatsApp</b> en el menú y escanee el QR con el número +502 4639 8632.</li>
+        <li>En <b>Envíos</b> pulse <b>Ejecutar ahora</b>: los enlaces llegan a +502 3076 9579.</li>
+        <li>Responda desde el celular y vea las respuestas en <b>Respuestas</b>.</li>
+      </ol>
+    </section>
+  </main>
+</body>
+</html>

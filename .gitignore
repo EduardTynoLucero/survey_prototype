@@ -1,0 +1,7 @@
+node_modules/
+data/
+server/auth/
+server/auth-wweb/
+.env
+*.log
+npm-debug.log*

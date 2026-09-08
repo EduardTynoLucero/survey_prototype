@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Módulo de encuestas | Digital Labs</title>
+  <link rel="stylesheet" href="admin.css">
+  <link rel="stylesheet" href="admin-extra.css">
+</head>
+<body>
+  <div class="pro-shell">
+    <header class="pro-topbar">
+      <div class="top-left">
+        <button class="square-icon" type="button" title="Menú">↤</button>
+        <a class="brand-logo" href="../index.html" aria-label="Digital Labs">
+          <img src="../assets/LOGO_DLABS2.png" alt="Digital Labs">
+        </a>
+      </div>
+      <div class="top-right">
+        <button class="status-icon" type="button" title="Notificaciones">
+          ♧
+          <span class="danger-badge">+3</span>
+        </button>
+        <button class="status-icon good" type="button" title="Aprobaciones">
+          ♢
+          <span class="good-badge">+21</span>
+        </button>
+        <span class="userchip">
+          <span class="user-avatar">BL</span>
+          <span class="user-meta">
+            <b>BRYAN LUCERO</b>
+            <small>DESARROLLADOR</small>
+          </span>
+          <span>›</span>
+        </span>
+        <button class="logout-btn" type="button">Cerrar sesión</button>
+      </div>
+    </header>
+
+    <nav class="module-nav" id="moduleNav" aria-label="Módulos principales"></nav>
+
+    <aside class="pro-sidebar" id="sidebar"></aside>
+
+    <main class="pro-content" id="appView"></main>
+
+    <aside class="preview-drawer" id="previewDrawer" aria-hidden="true">
+      <div class="preview-backdrop" id="previewBackdrop"></div>
+      <section class="preview-shell" role="dialog" aria-modal="true" aria-labelledby="previewTitle">
+        <header class="preview-head">
+          <div>
+            <small>Vista previa pública</small>
+            <h2 id="previewTitle">Encuesta</h2>
+          </div>
+          <button class="round-icon" type="button" id="closePreview" title="Cerrar">×</button>
+        </header>
+        <div id="previewContent" class="preview-content"></div>
+      </section>
+    </aside>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  </div>
+
+  <script src="../assets/engine.js"></script>
+  <script src="admin.js"></script>
+</body>
+</html>

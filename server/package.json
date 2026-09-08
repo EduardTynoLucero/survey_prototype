@@ -1,0 +1,14 @@
+{
+  "name": "motor-encuestas-digital-labs",
+  "version": "1.0.0",
+  "description": "Motor de encuestas internas y externas con envio por WhatsApp (Baileys)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.9",
+    "qrcode": "^1.5.4",
+    "qrcode-terminal": "^0.12.0"
+  }
+}
