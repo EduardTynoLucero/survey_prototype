@@ -23,20 +23,55 @@ function mesAnterior(referencia = new Date()) {
   const d = new Date(referencia.getFullYear(), referencia.getMonth() - 1, 1);
   const anio = d.getFullYear();
   const mes = d.getMonth() + 1;
+  const ultimoDia = new Date(anio, mes, 0).getDate();
+  const mm = String(mes).padStart(2, "0");
   return {
     anio,
     mes,
-    clave: `${anio}-${String(mes).padStart(2, "0")}`,
+    clave: `${anio}-${mm}`,
     etiqueta: `${MESES[d.getMonth()]} ${anio}`,
+    desde: `${anio}-${mm}-01`,
+    hasta: `${anio}-${mm}-${String(ultimoDia).padStart(2, "0")}`,
   };
 }
 
-/* Si la encuesta tiene el periodo en automatico, lo recalcula */
+/* "DD/MM/YYYY" -> "YYYY-MM-DD" (así se pueden comparar como texto) */
+function aISO(fecha) {
+  if (!fecha || !String(fecha).includes("/")) return "";
+  const [dia, mes, anio] = String(fecha).split("/");
+  return `${anio}-${mes}-${dia}`;
+}
+
+function bonita(iso) {
+  if (!iso || !iso.includes("-")) return iso || "";
+  const [anio, mes, dia] = iso.split("-");
+  return `${dia}/${mes}/${anio}`;
+}
+
+function enRango(trabajo, desde, hasta) {
+  if (!desde && !hasta) return true;
+  const fecha = aISO(trabajo.sent);
+  if (!fecha) return false;
+  if (desde && fecha < desde) return false;
+  if (hasta && fecha > hasta) return false;
+  return true;
+}
+
+/* Con período automático se usa el mes anterior completo.
+   En manual manda el rango de fechas que eligió el usuario. */
 function aplicarPeriodoAuto(encuesta) {
-  if (encuesta && encuesta.periodAuto !== false) {
+  if (!encuesta) return encuesta;
+  if (encuesta.periodAuto !== false) {
     const p = mesAnterior();
     encuesta.period = p.clave;
     encuesta.periodLabel = p.etiqueta;
+    encuesta.periodFrom = p.desde;
+    encuesta.periodTo = p.hasta;
+  } else {
+    encuesta.periodLabel =
+      encuesta.periodFrom && encuesta.periodTo
+        ? `${bonita(encuesta.periodFrom)} al ${bonita(encuesta.periodTo)}`
+        : "Período sin definir";
   }
   return encuesta;
 }
@@ -266,6 +301,8 @@ function nuevaEncuesta(clasificacion = "Externa", extra = {}) {
       periodAuto: true,
       periodLabel: PERIODO.etiqueta,
       period: PERIODO.clave,
+      periodFrom: PERIODO.desde,
+      periodTo: PERIODO.hasta,
       schedule: {
         active: externa,
         repeat: externa ? "Mensual" : "No repetir",
@@ -320,13 +357,13 @@ function semilla() {
 
 /* Trabajos elegibles agrupados por doctor (RF-ENC-001).
    Con seleccion manual se limita a los doctores y ordenes elegidos. */
-function agruparPorDoctor(estados, periodo, filtro = {}) {
+function agruparPorDoctor(estados, rango = {}, filtro = {}) {
   const doctores = filtro.doctores && filtro.doctores.length ? filtro.doctores : null;
   const ordenes = filtro.ordenes && filtro.ordenes.length ? filtro.ordenes : null;
   const mapa = new Map();
 
   TRABAJOS.filter((t) => estados.includes(t.status))
-    .filter((t) => !periodo || t.period === periodo)
+    .filter((t) => enRango(t, rango.desde, rango.hasta))
     .filter((t) => !doctores || doctores.includes(t.doctor))
     .filter((t) => !ordenes || ordenes.includes(t.id))
     .forEach((t) => {
@@ -337,4 +374,4 @@ function agruparPorDoctor(estados, periodo, filtro = {}) {
   return [...mapa.values()];
 }
 
-module.exports = { AREAS, TRABAJOS, PERIODO, uid, pregunta, seccion, nuevaEncuesta, semilla, agruparPorDoctor, mesAnterior, aplicarPeriodoAuto };
+module.exports = { AREAS, TRABAJOS, PERIODO, uid, pregunta, seccion, nuevaEncuesta, semilla, agruparPorDoctor, mesAnterior, aplicarPeriodoAuto, aISO, bonita, enRango };

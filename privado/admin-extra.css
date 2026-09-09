@@ -383,3 +383,251 @@ code {
   display: block;
   font-weight: 700;
 }
+
+/* ===================================================================
+   Menús desplegables (opciones de la lista y nueva encuesta)
+   =================================================================== */
+.menu-wrap {
+  position: relative;
+  display: inline-block;
+}
+
+.menu-trigger.on {
+  border-color: var(--pink);
+  background: var(--pink-soft);
+  color: var(--pink-dark);
+}
+
+.menu-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 30;
+  min-width: 178px;
+  display: grid;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  box-shadow: 0 10px 26px rgba(25, 32, 42, .16);
+}
+
+.menu-pop button {
+  display: block;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.menu-pop button:hover {
+  background: var(--pink-soft);
+  color: var(--pink-dark);
+}
+
+.menu-pop button.danger {
+  color: var(--red);
+}
+
+.menu-pop button.danger:hover {
+  background: #fdf3f3;
+}
+
+/* Menú de "Nueva encuesta": dos opciones con descripción corta */
+.menu-pop.nueva {
+  min-width: 230px;
+  gap: 2px;
+  padding: 6px;
+}
+
+.menu-pop.nueva button {
+  padding: 9px 10px;
+}
+
+.menu-pop.nueva b {
+  display: block;
+  font-size: 12.5px;
+}
+
+.menu-pop.nueva small {
+  display: block;
+  margin-top: 1px;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.menu-pop.nueva button:hover small {
+  color: var(--pink-dark);
+}
+
+/* La tabla deja salir el menú cuando hay uno abierto */
+.table-wrap.menu-open {
+  overflow: visible;
+}
+
+/* Los pasos ya no llevan descripción: quedan más compactos */
+.wizard-step button {
+  padding: 10px 12px;
+}
+
+/* ===================================================================
+   Período evaluado (Programación y envío)
+   =================================================================== */
+.periodo-box {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-soft);
+}
+
+.periodo-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.periodo-head b {
+  display: block;
+  font-size: 12.5px;
+}
+
+.periodo-head span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.periodo-auto {
+  margin: 0 0 8px;
+  padding: 9px 11px;
+  border-radius: 5px;
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.periodo-box .tiny {
+  margin: 4px 2px 0;
+}
+
+.periodo-box input[type="date"] {
+  min-height: 34px;
+}
+
+/* ===================================================================
+   Asistente más compacto: campos y tarjetas más bajos
+   =================================================================== */
+.edit-shell .field input,
+.edit-shell .field select,
+.edit-shell .field textarea {
+  min-height: 28px;
+  padding: 5px 7px;
+  font-size: 11.5px;
+}
+
+.edit-shell .field textarea {
+  min-height: 54px;
+}
+
+.edit-shell .field span {
+  font-size: 10px;
+}
+
+.edit-shell .field small {
+  font-size: 10px;
+  line-height: 1.3;
+}
+
+.edit-shell .form-grid {
+  gap: 8px;
+  padding: 10px 12px;
+}
+
+.edit-shell .page-card {
+  margin-bottom: 8px;
+}
+
+.edit-shell .card-title {
+  padding: 9px 12px;
+  font-size: 13px;
+}
+
+.edit-shell .wizard-steps {
+  gap: 5px;
+  margin-bottom: 9px;
+}
+
+.wizard-step button {
+  padding: 8px 10px;
+  gap: 7px;
+}
+
+.step-num {
+  width: 19px;
+  height: 19px;
+  flex-basis: 19px;
+  font-size: 10px;
+}
+
+.step-text b {
+  font-size: 11.5px;
+}
+
+/* Período evaluado */
+.periodo-box {
+  margin-top: 8px;
+  padding: 10px;
+}
+
+.periodo-head {
+  margin-bottom: 7px;
+}
+
+.periodo-auto {
+  padding: 7px 9px;
+  font-size: 11.5px;
+}
+
+.periodo-box .form-grid {
+  padding: 0;
+}
+
+/* Prueba de agenda */
+.agenda-test {
+  margin-top: 8px;
+  padding: 9px 11px;
+  gap: 10px;
+}
+
+.agenda-test input[type="number"] {
+  min-height: 28px;
+}
+
+/* Mensaje de WhatsApp */
+.whatsapp-preview {
+  margin-top: 8px;
+  padding: 10px;
+}
+
+.whatsapp-preview p {
+  font-size: 11.5px;
+}
+
+/* Barra inferior */
+.bottom-actions.sticky {
+  padding: 8px 12px;
+}
+
+.edit-shell .btn {
+  min-height: 32px;
+  font-size: 11.5px;
+}

@@ -44,6 +44,7 @@
     openQuestionId: "",
     selectedWorkId: "15281",
     openDoctor: "",
+    openMenu: "",
     previewDoctor: "",
     previewOpen: false,
     focusAfterRender: "",
@@ -113,6 +114,27 @@
   };
   const activeSection = () => findSection(state.activeSectionId) || draft().sections[0];
   const draftWorks = () => DL.findWorks(draft().works.selectedIds);
+
+  /* Trabajos elegibles según el período configurado en la encuesta */
+  const elegibles = () => {
+    const survey = draft();
+    return DL.eligibleWorks(survey.works.statuses, survey.periodFrom, survey.periodTo);
+  };
+
+  const bonita = (iso) => {
+    if (!iso || !iso.includes("-")) return iso || "";
+    const [anio, mes, dia] = iso.split("-");
+    return `${dia}/${mes}/${anio}`;
+  };
+
+  /* Etiqueta del período, calculada al vuelo para que se vea al instante */
+  const etiquetaPeriodo = () => {
+    const survey = draft();
+    if (survey.periodAuto !== false) return survey.periodLabel;
+    return survey.periodFrom && survey.periodTo
+      ? `${bonita(survey.periodFrom)} al ${bonita(survey.periodTo)}`
+      : "Período sin definir";
+  };
   const selectedWork = () => DL.WORKS.find((work) => work.id === state.selectedWorkId) || DL.WORKS[0];
 
   function abrirBorrador(survey) {
@@ -131,6 +153,10 @@
       try {
         const guardada = await DL.api.guardarEncuesta(state.draft);
         state.draft.schedule.nextRun = guardada.schedule.nextRun;
+        state.draft.periodLabel = guardada.periodLabel;
+        state.draft.period = guardada.period;
+        state.draft.periodFrom = guardada.periodFrom;
+        state.draft.periodTo = guardada.periodTo;
         state.surveys = await DL.api.encuestas();
         if (badge) badge.textContent = "Se han guardado todos los cambios";
         if (mensaje) showToast(mensaje);
@@ -165,6 +191,21 @@
      Eventos
      ================================================================== */
   function onClick(event) {
+    /* Menús desplegables: abrir, cerrar y cerrar al hacer clic fuera */
+    const menuBtn = event.target.closest("[data-menu]");
+    if (menuBtn) {
+      state.openMenu = state.openMenu === menuBtn.dataset.menu ? "" : menuBtn.dataset.menu;
+      renderView();
+      return;
+    }
+    if (state.openMenu && !event.target.closest(".menu-pop")) {
+      state.openMenu = "";
+      if (!event.target.closest("[data-act],[data-view],[data-step],[data-module]")) {
+        renderView();
+        return;
+      }
+    }
+
     const moduleTab = event.target.closest("[data-module]");
     if (moduleTab) {
       state.module = moduleTab.dataset.module;
@@ -235,14 +276,10 @@
 
   async function runAction(act, arg, node) {
     const survey = state.draft;
+    state.openMenu = "";
 
     try {
       switch (act) {
-        case "new-survey":
-          state.view = "survey-type";
-          renderApp();
-          return;
-
         case "create": {
           const creada = await DL.api.crearEncuesta(arg);
           state.surveys = await DL.api.encuestas();
@@ -693,12 +730,10 @@
     }
     if (target.matches("[data-sched-field]")) {
       survey.schedule[target.dataset.schedField] = target.value;
-      guardar();
-      renderView();
-      return;
-    }
-    if (target.matches("[data-sched-check]")) {
-      survey.schedule[target.dataset.schedCheck] = target.checked;
+      /* La agenda corre sola siempre que la encuesta se repita */
+      if (target.dataset.schedField === "repeat") {
+        survey.schedule.active = target.value !== "No repetir";
+      }
       guardar();
       renderView();
       return;
@@ -739,7 +774,7 @@
     if (target.matches("[data-doctor-pick]")) {
       const doctor = target.dataset.doctorPick;
       survey.audienceDoctors = toggle(survey.audienceDoctors || [], doctor, target.checked);
-      const suyas = DL.worksByDoctor(doctor, survey.works.statuses).map((work) => work.id);
+      const suyas = DL.worksByDoctor(doctor, survey.works.statuses, survey.periodFrom, survey.periodTo).map((work) => work.id);
       survey.works.selectedIds = target.checked
         ? [...new Set([...survey.works.selectedIds, ...suyas])]
         : survey.works.selectedIds.filter((id) => !suyas.includes(id));
@@ -873,7 +908,6 @@
   function renderView() {
     const vistas = {
       "survey-list": renderSurveyList,
-      "survey-type": renderSurveyType,
       "survey-edit": renderEditor,
       sends: renderSends,
       answers: renderAnswers,
@@ -917,11 +951,18 @@
           <button class="tab-lite ${state.listFilter === "ext" ? "active" : ""}" type="button" data-act="filter" data-arg="ext">Externas (${counts.ext})</button>
           <button class="tab-lite ${state.listFilter === "int" ? "active" : ""}" type="button" data-act="filter" data-arg="int">Internas (${counts.int})</button>
         </div>
-        <button class="btn primary" type="button" data-act="new-survey">＋ Nueva encuesta</button>
+        <div class="menu-wrap">
+          <button class="btn primary" type="button" data-menu="nueva">＋ Nueva encuesta ▾</button>
+          ${state.openMenu === "nueva" ? `
+            <div class="menu-pop nueva">
+              <button type="button" data-act="create" data-arg="Interna">Interna</button>
+              <button type="button" data-act="create" data-arg="Externa">Externa</button>
+            </div>` : ""}
+        </div>
       </div>
 
       <section class="page-card">
-        <div class="table-wrap">
+        <div class="table-wrap ${state.openMenu.startsWith("s-") ? "menu-open" : ""}">
           <table class="data-table">
             <thead><tr><th>Encuesta</th><th>Clasificación</th><th>Responde</th><th>Programación</th><th>Envíos</th><th>Estado</th><th>Opciones</th></tr></thead>
             <tbody>
@@ -942,13 +983,19 @@
                       <td>${survey._instancias || 0}</td>
                       <td><span class="badge ${survey.status === "Activa" ? "" : "neutral"}">${esc(survey.status.toUpperCase())}</span></td>
                       <td class="row-actions">
-                        <button class="mini-btn primary" type="button" data-act="edit" data-arg="${esc(survey.id)}">✎ Abrir</button>
-                        <button class="mini-btn" type="button" data-act="edit" data-arg="${esc(survey.id)}" data-target="questions">▧ Preguntas</button>
-                        <button class="mini-btn" type="button" data-act="preview" data-arg="${esc(survey.id)}">◎ Vista previa</button>
-                        <button class="mini-btn" type="button" data-act="sends" data-arg="${esc(survey.id)}">✈ Envíos</button>
-                        <button class="mini-btn" type="button" data-act="duplicate" data-arg="${esc(survey.id)}">Duplicar</button>
-                        <button class="mini-btn" type="button" data-act="toggle-status" data-arg="${esc(survey.id)}">${survey.status === "Activa" ? "Desactivar" : "Activar"}</button>
-                        <button class="mini-btn danger" type="button" data-act="delete" data-arg="${esc(survey.id)}">Eliminar</button>
+                        <div class="menu-wrap">
+                          <button class="mini-btn menu-trigger ${state.openMenu === "s-" + survey.id ? "on" : ""}" type="button" data-menu="s-${esc(survey.id)}">Opciones ▾</button>
+                          ${state.openMenu === "s-" + survey.id ? `
+                            <div class="menu-pop">
+                              <button type="button" data-act="edit" data-arg="${esc(survey.id)}">✎ Abrir</button>
+                              <button type="button" data-act="edit" data-arg="${esc(survey.id)}" data-target="questions">▧ Preguntas</button>
+                              <button type="button" data-act="preview" data-arg="${esc(survey.id)}">◎ Vista previa</button>
+                              <button type="button" data-act="sends" data-arg="${esc(survey.id)}">✈ Envíos</button>
+                              <button type="button" data-act="duplicate" data-arg="${esc(survey.id)}">⧉ Duplicar</button>
+                              <button type="button" data-act="toggle-status" data-arg="${esc(survey.id)}">${survey.status === "Activa" ? "✕ Desactivar" : "✓ Activar"}</button>
+                              <button class="danger" type="button" data-act="delete" data-arg="${esc(survey.id)}">🗑 Eliminar</button>
+                            </div>` : ""}
+                        </div>
                       </td>
                     </tr>`;
                 })
@@ -958,36 +1005,6 @@
         </div>
       </section>
       <div class="bottom-actions"><span>Mostrando ${list.length} de ${all.length} encuestas</span><span>‹ 1 ›</span></div>`;
-  }
-
-  function renderSurveyType() {
-    return `
-      <div class="toolbar-strip">
-        <div class="view-tabs"><span class="tab-lite active">Nueva encuesta</span></div>
-        <button class="link-action" type="button" data-view="survey-list">← Regresar</button>
-      </div>
-      <section class="creation-shell">
-        <header class="creation-head">
-          <span class="eyebrow">PASO 1 DE 5</span>
-          <h1>¿Qué tipo de encuesta desea crear?</h1>
-          <p>Las dos usan el mismo editor y la misma vista previa. Cambia a quién se dirige y cómo se envía.</p>
-        </header>
-        <div class="creation-grid">
-          <button class="creation-card" type="button" data-act="create" data-arg="Interna">
-            <span class="creation-icon">I</span><span class="badge neutral">INTERNA</span>
-            <b>Para el personal</b>
-            <span>Colaboradores por área o supervisor. Puede enviarse una vez o repetirse.</span>
-            <strong>Crear encuesta interna →</strong>
-          </button>
-          <button class="creation-card featured" type="button" data-act="create" data-arg="Externa">
-            <span class="creation-icon">E</span><span class="badge pink">EXTERNA</span>
-            <b>Para doctores</b>
-            <span>Jala las órdenes del mes del doctor y se envía por WhatsApp.</span>
-            <strong>Crear encuesta externa →</strong>
-          </button>
-        </div>
-        <div class="flow-summary">${STEPS.map(([, label], index) => `<span><b>${index + 1}</b> ${label}</span>`).join("")}</div>
-      </section>`;
   }
 
   /* ---------------- Editor ---------------- */
@@ -1012,11 +1029,11 @@
         </div>
 
         <ol class="wizard-steps">
-          ${STEPS.map(([id, label, help], index) => `
+          ${STEPS.map(([id, label], index) => `
             <li class="wizard-step ${state.step === id ? "active" : ""} ${index < stepIndex ? "done" : ""}">
               <button type="button" data-step="${id}">
                 <span class="step-num">${index < stepIndex ? "✓" : index + 1}</span>
-                <span class="step-text"><b>${label}</b><small>${help}</small></span>
+                <span class="step-text"><b>${label}</b></span>
               </button>
             </li>`).join("")}
         </ol>
@@ -1047,11 +1064,7 @@
             <label class="field span2"><span>Descripción <small>es el texto que ve quien responde al abrir la encuesta</small></span><textarea rows="3" data-survey-field="description">${esc(survey.description)}</textarea></label>
             <label class="field"><span>Subcategoría</span><select data-survey-field="subtype">${options(external ? ["Servicio y Calidad", "Encuesta general", "Nuevos productos"] : ["Liderazgo", "Clima laboral", "Capacitación", "Eventos y actividades", "Encuesta general"], survey.subtype)}</select></label>
             <label class="field"><span>Estado</span><select data-survey-field="status">${options(["Borrador", "Activa", "Inactiva"], survey.status)}</select></label>
-            <div class="field span2">
-              <span>Período evaluado</span>
-              <label class="switch-row"><input type="checkbox" data-survey-check="periodAuto" ${survey.periodAuto !== false ? "checked" : ""}> Automático <small>siempre el mes calendario anterior</small></label>
-              <input data-survey-field="periodLabel" value="${attr(survey.periodLabel)}" ${survey.periodAuto !== false ? "readonly" : ""}>
-            </div>
+
           </div>
           <aside class="side-summary">
             <div><b>${external ? "Encuesta externa" : "Encuesta interna"}</b><span>${external ? "Se dirige a doctores, usa las órdenes del período y se envía por WhatsApp." : "Se dirige al personal por área o supervisor."}</span></div>
@@ -1083,7 +1096,7 @@
         </section>`;
     }
 
-    const eligible = DL.eligibleWorks(survey.works.statuses);
+    const eligible = elegibles();
     const manual = survey.audienceMode === "Selección manual";
     const elegidos = survey.audienceDoctors || [];
 
@@ -1102,7 +1115,7 @@
             <small>${manual ? "Solo se enviará a los doctores y las órdenes que marque abajo." : "Se genera una encuesta por cada doctor con trabajos del período."}</small>
           </label>
           <div class="field span2"><span>Alcance del período</span>
-            <input value="${doctores.length} doctores · ${eligible.length} órdenes enviadas en ${attr(survey.periodLabel)}" readonly>
+            <input value="${doctores.length} doctores · ${eligible.length} órdenes enviadas en ${attr(etiquetaPeriodo())}" readonly>
           </div>
         </div>
 
@@ -1179,10 +1192,28 @@
             <label class="field"><span>Hora</span><input type="time" data-sched-field="time" value="${attr(survey.schedule.time)}"></label>
             <label class="field"><span>Día de cierre</span><input type="number" min="1" max="28" data-sched-field="closeDay" value="${attr(survey.schedule.closeDay)}"></label>
           ` : ""}
-          <label class="field"><span>Agenda</span><label class="switch-row"><input type="checkbox" data-sched-check="active" ${survey.schedule.active ? "checked" : ""}> Activa</label><small>Con la agenda activa el servidor ejecuta el JOB solo.</small></label>
           <label class="field span2"><span>Próxima ejecución</span><input value="${attr(survey.schedule.nextRun || "—")}" readonly></label>
           <label class="field"><span>Última ejecución</span><input value="${attr(survey.schedule.lastRun || "—")}" readonly></label>
         </div>
+
+        ${survey.works.enabled ? `
+          <div class="periodo-box">
+            <div class="periodo-head">
+              <div><b>¿Qué órdenes entran en la encuesta?</b></div>
+              <label class="switch-row"><input type="checkbox" data-survey-check="periodAuto" ${survey.periodAuto !== false ? "checked" : ""}> Automático</label>
+            </div>
+            ${survey.periodAuto !== false ? `
+              <p class="periodo-auto">Siempre el <b>mes calendario anterior</b>. Hoy sería <b>${esc(etiquetaPeriodo())}</b> (${esc(bonita(survey.periodFrom))} al ${esc(bonita(survey.periodTo))}).</p>
+            ` : `
+              <div class="form-grid g4">
+                <label class="field"><span>Desde *</span><input type="date" data-survey-field="periodFrom" value="${attr(survey.periodFrom || "")}"></label>
+                <label class="field"><span>Hasta *</span><input type="date" data-survey-field="periodTo" value="${attr(survey.periodTo || "")}"></label>
+                <label class="field span2"><span>Período</span><input value="${attr(etiquetaPeriodo())}" readonly></label>
+              </div>
+            `}
+            <p class="tiny">Con este período hay <b>${elegibles().length}</b> orden(es) enviadas, de <b>${[...new Set(elegibles().map((w) => w.doctor))].length}</b> doctor(es).</p>
+          </div>
+        ` : ""}
 
         <div class="agenda-test">
           <div><b>Probar la agenda sin esperar al día ${esc(survey.schedule.generationDay)}</b>
@@ -1869,12 +1900,12 @@ npm start</pre>` : ""}
       return { doctor: survey.respondent, works: [], doctores: [] };
     }
     const manual = survey.audienceMode === "Selección manual";
-    const elegibles = DL.eligibleWorks(survey.works.statuses);
-    let doctores = [...new Set(elegibles.map((work) => work.doctor))];
+    const lista = elegibles();
+    let doctores = [...new Set(lista.map((work) => work.doctor))];
     if (manual) doctores = doctores.filter((doctor) => (survey.audienceDoctors || []).includes(doctor));
 
     const doctor = doctores.includes(state.previewDoctor) ? state.previewDoctor : doctores[0] || "";
-    let works = elegibles.filter((work) => work.doctor === doctor);
+    let works = lista.filter((work) => work.doctor === doctor);
     if (manual) works = works.filter((work) => survey.works.selectedIds.includes(work.id));
     return { doctor: doctor || survey.respondent, works, doctores };
   }

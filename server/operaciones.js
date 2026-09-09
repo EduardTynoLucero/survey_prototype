@@ -48,7 +48,7 @@ function generar(encuesta) {
     return db.instancias.reemplazarPeriodo(encuesta.id, periodo, [instancia]);
   }
 
-  const grupos = catalogo.agruparPorDoctor(encuesta.works.statuses, periodo, {
+  const grupos = catalogo.agruparPorDoctor(encuesta.works.statuses, { desde: encuesta.periodFrom, hasta: encuesta.periodTo }, {
     doctores: manual ? encuesta.audienceDoctors : null,
     ordenes: manual ? encuesta.works.selectedIds : null,
   });

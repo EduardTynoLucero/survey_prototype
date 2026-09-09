@@ -126,8 +126,28 @@
   /* Trabajos cargados desde el servidor */
   DL.WORKS = [];
   DL.findWorks = (ids) => DL.WORKS.filter((work) => (ids || []).includes(work.id));
-  DL.eligibleWorks = (statuses) => DL.WORKS.filter((work) => (statuses || ["enviado"]).includes(work.status));
-  DL.worksByDoctor = (doctor, statuses) => DL.eligibleWorks(statuses).filter((work) => work.doctor === doctor);
+
+  /* "DD/MM/YYYY" -> "YYYY-MM-DD", para comparar fechas como texto */
+  DL.aISO = (fecha) => {
+    if (!fecha || !String(fecha).includes("/")) return "";
+    const [dia, mes, anio] = String(fecha).split("/");
+    return `${anio}-${mes}-${dia}`;
+  };
+
+  DL.enRango = (work, desde, hasta) => {
+    if (!desde && !hasta) return true;
+    const fecha = DL.aISO(work.sent);
+    if (!fecha) return false;
+    if (desde && fecha < desde) return false;
+    if (hasta && fecha > hasta) return false;
+    return true;
+  };
+
+  DL.eligibleWorks = (statuses, desde, hasta) =>
+    DL.WORKS.filter((work) => (statuses || ["enviado"]).includes(work.status) && DL.enRango(work, desde, hasta));
+
+  DL.worksByDoctor = (doctor, statuses, desde, hasta) =>
+    DL.eligibleWorks(statuses, desde, hasta).filter((work) => work.doctor === doctor);
 
   DL.cargarTrabajos = async () => {
     DL.WORKS = await DL.api.trabajos();
