@@ -160,6 +160,7 @@ async function api(req, res, ruta, consulta) {
 
     if (!id && req.method === "POST") {
       const encuesta = catalogo.nuevaEncuesta(cuerpo.classification === "Interna" ? "Interna" : "Externa");
+      catalogo.aplicarPeriodoAuto(encuesta);
       encuesta.schedule.nextRun = agenda.proximaEjecucion(encuesta);
       db.encuestas.crear(encuesta);
       return json(res, encuesta, 201);
@@ -172,6 +173,7 @@ async function api(req, res, ruta, consulta) {
       if (req.method === "GET") return json(res, encuesta);
       if (req.method === "PUT") {
         const actualizada = Object.assign({}, encuesta, cuerpo, { id: encuesta.id });
+        catalogo.aplicarPeriodoAuto(actualizada);
         actualizada.schedule.nextRun = agenda.proximaEjecucion(actualizada);
         db.encuestas.guardar(actualizada);
         return json(res, actualizada);

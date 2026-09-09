@@ -25,7 +25,9 @@ function armarMensaje(encuesta, instancia) {
 
 /* RF-ENC-001: una encuesta por doctor con todos sus trabajos elegibles */
 function generar(encuesta) {
+  catalogo.aplicarPeriodoAuto(encuesta);
   const periodo = encuesta.period;
+  const manual = encuesta.audienceMode === "Selección manual";
 
   if (!encuesta.works.enabled) {
     const instancia = {
@@ -46,7 +48,10 @@ function generar(encuesta) {
     return db.instancias.reemplazarPeriodo(encuesta.id, periodo, [instancia]);
   }
 
-  const grupos = catalogo.agruparPorDoctor(encuesta.works.statuses, periodo);
+  const grupos = catalogo.agruparPorDoctor(encuesta.works.statuses, periodo, {
+    doctores: manual ? encuesta.audienceDoctors : null,
+    ordenes: manual ? encuesta.works.selectedIds : null,
+  });
   const nuevas = grupos.map((grupo) => ({
     id: catalogo.uid("inst"),
     surveyId: encuesta.id,

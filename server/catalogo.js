@@ -13,7 +13,44 @@ const AREAS = [
   "Gerencia",
 ];
 
-function trabajo(code, box, clinic, doctor, patient, status, product, advisor, sent) {
+const MESES = [
+  "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+  "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
+];
+
+/* Periodo evaluado por defecto: el mes calendario anterior (RN-ENC-001) */
+function mesAnterior(referencia = new Date()) {
+  const d = new Date(referencia.getFullYear(), referencia.getMonth() - 1, 1);
+  const anio = d.getFullYear();
+  const mes = d.getMonth() + 1;
+  return {
+    anio,
+    mes,
+    clave: `${anio}-${String(mes).padStart(2, "0")}`,
+    etiqueta: `${MESES[d.getMonth()]} ${anio}`,
+  };
+}
+
+/* Si la encuesta tiene el periodo en automatico, lo recalcula */
+function aplicarPeriodoAuto(encuesta) {
+  if (encuesta && encuesta.periodAuto !== false) {
+    const p = mesAnterior();
+    encuesta.period = p.clave;
+    encuesta.periodLabel = p.etiqueta;
+  }
+  return encuesta;
+}
+
+const PERIODO = mesAnterior();
+
+/* Las ordenes de muestra se fechan siempre dentro del mes evaluado,
+   para que la demo siga teniendo datos sin importar en que mes se abra. */
+function fechaDelPeriodo(dia) {
+  return `${String(dia).padStart(2, "0")}/${String(PERIODO.mes).padStart(2, "0")}/${PERIODO.anio}`;
+}
+
+function trabajo(code, box, clinic, doctor, patient, status, product, advisor, dia) {
+  const sent = dia ? fechaDelPeriodo(dia) : "—";
   return {
     id: code,
     code,
@@ -25,24 +62,24 @@ function trabajo(code, box, clinic, doctor, patient, status, product, advisor, s
     product,
     advisor,
     sent,
-    period: sent && sent.includes("/") ? `${sent.slice(6)}-${sent.slice(3, 5)}` : "",
+    period: dia ? PERIODO.clave : "",
   };
 }
 
 const TRABAJOS = [
-  trabajo("15281", "244", "1053 - CLINICAS DENTALES GRUPO DENT", "Dra. IRENE DE LEON", "Gabriela Marroquín", "enviado", "Corona zirconia", "Andrea López", "05/08/2026"),
-  trabajo("15292", "244", "1053 - CLINICAS DENTALES GRUPO DENT", "Dra. IRENE DE LEON", "Mario Díaz", "enviado", "Puente zirconia", "Andrea López", "13/08/2026"),
-  trabajo("15304", "244", "1053 - CLINICAS DENTALES GRUPO DENT", "Dra. IRENE DE LEON", "Ana Morales", "enviado", "Corona e.max", "María Fernanda Soto", "22/08/2026"),
-  trabajo("15318", "244", "1053 - CLINICAS DENTALES GRUPO DENT", "Dra. IRENE DE LEON", "Carlos López", "enviado", "Prótesis fija", "Andrea López", "24/08/2026"),
-  trabajo("15330", "244", "1053 - CLINICAS DENTALES GRUPO DENT", "Dra. IRENE DE LEON", "Lucía Paz", "enviado", "Carilla feldespática", "María Fernanda Soto", "29/08/2026"),
-  trabajo("202609661", "334", "ZONA DENTAL, S.A.", "ALAN ANTILLON", "INES BEJOT", "enviado", "Corona zirconia", "María Fernanda Soto", "11/08/2026"),
-  trabajo("202609494", "149", "CLINICA INTEGRA DENTAL DRA. CARLA CENTENO", "CARLA CENTENO", "RUDY FERNANDO NAVAS", "enviado", "Puente zirconia", "Andrea López", "18/08/2026"),
-  trabajo("202609512", "149", "CLINICA INTEGRA DENTAL DRA. CARLA CENTENO", "CARLA CENTENO", "SOFIA GARCIA", "enviado", "Incrustación", "Andrea López", "27/08/2026"),
-  trabajo("202609857", "84", "ESPECIALISTAS DENTALES INTERNACIONALES", "ALEJANDRO FLORES", "SILVIA SECAIRAS", "en proceso", "Corona zirconia", "Karla Ruiz", "—"),
-  trabajo("202609960", "29", "CLINICA DE ODONTOLOGIA COSMETICA Y ORTODONCIA", "ILEM MARIA CARAVIA PORTAL", "ESTUARDO MOLINA", "en laboratorio", "Puente zirconia", "Karla Ruiz", "—"),
-  trabajo("202609958", "117", "AM RAMOS DENTAL", "MARCELINO RAMOS", "KAREN STEFAN PEÑATE CASTILLO", "en laboratorio", "Corona e.max", "Karla Ruiz", "—"),
-  trabajo("202609103", "510", "CENTRO CLINICO DENTAL", "ISABELA VILLAGRAN", "ANDERSON PEREZ", "facturado", "Carilla feldespática", "Andrea López", "30/08/2026"),
-  trabajo("202609462", "277", "DENTES", "ANAITHE RUIZ", "ARNOLDO PELICO", "en proceso", "Prótesis total", "Karla Ruiz", "—"),
+  trabajo("15281", "244", "1053 - CLINICAS DENTALES GRUPO DENT", "Dra. IRENE DE LEON", "Gabriela Marroquín", "enviado", "Corona zirconia", "Andrea López", 5),
+  trabajo("15292", "244", "1053 - CLINICAS DENTALES GRUPO DENT", "Dra. IRENE DE LEON", "Mario Díaz", "enviado", "Puente zirconia", "Andrea López", 13),
+  trabajo("15304", "244", "1053 - CLINICAS DENTALES GRUPO DENT", "Dra. IRENE DE LEON", "Ana Morales", "enviado", "Corona e.max", "María Fernanda Soto", 22),
+  trabajo("15318", "244", "1053 - CLINICAS DENTALES GRUPO DENT", "Dra. IRENE DE LEON", "Carlos López", "enviado", "Prótesis fija", "Andrea López", 24),
+  trabajo("15330", "244", "1053 - CLINICAS DENTALES GRUPO DENT", "Dra. IRENE DE LEON", "Lucía Paz", "enviado", "Carilla feldespática", "María Fernanda Soto", 26),
+  trabajo("202609661", "334", "ZONA DENTAL, S.A.", "ALAN ANTILLON", "INES BEJOT", "enviado", "Corona zirconia", "María Fernanda Soto", 11),
+  trabajo("202609494", "149", "CLINICA INTEGRA DENTAL DRA. CARLA CENTENO", "CARLA CENTENO", "RUDY FERNANDO NAVAS", "enviado", "Puente zirconia", "Andrea López", 18),
+  trabajo("202609512", "149", "CLINICA INTEGRA DENTAL DRA. CARLA CENTENO", "CARLA CENTENO", "SOFIA GARCIA", "enviado", "Incrustación", "Andrea López", 27),
+  trabajo("202609857", "84", "ESPECIALISTAS DENTALES INTERNACIONALES", "ALEJANDRO FLORES", "SILVIA SECAIRAS", "en proceso", "Corona zirconia", "Karla Ruiz", 0),
+  trabajo("202609960", "29", "CLINICA DE ODONTOLOGIA COSMETICA Y ORTODONCIA", "ILEM MARIA CARAVIA PORTAL", "ESTUARDO MOLINA", "en laboratorio", "Puente zirconia", "Karla Ruiz", 0),
+  trabajo("202609958", "117", "AM RAMOS DENTAL", "MARCELINO RAMOS", "KAREN STEFAN PEÑATE CASTILLO", "en laboratorio", "Corona e.max", "Karla Ruiz", 0),
+  trabajo("202609103", "510", "CENTRO CLINICO DENTAL", "ISABELA VILLAGRAN", "ANDERSON PEREZ", "facturado", "Carilla feldespática", "Andrea López", 28),
+  trabajo("202609462", "277", "DENTES", "ANAITHE RUIZ", "ARNOLDO PELICO", "en proceso", "Prótesis total", "Karla Ruiz", 0),
 ];
 
 /* ------------------------------------------------------------------ */
@@ -68,7 +105,7 @@ function pregunta(extra = {}) {
       lowThreshold: 4,
       lowOptionsRequired: true,
       lowCommentRequired: true,
-      linkLowRatingToWorks: true,
+      linkLowRatingToWorks: false,
       lowPrompt: "¿Qué considera que podemos mejorar?",
       improvementOptions: ["Comunicación", "Tiempo", "Proceso", "Resultado", "Otro"],
       highOptionsOptional: true,
@@ -85,7 +122,7 @@ function seccion(extra = {}) {
     {
       id: uid("sec"),
       title: "Nueva categoría",
-      description: "Descripción de la categoría.",
+      description: "",
       active: true,
       useWorks: false,
       allowedModes: [],
@@ -97,6 +134,17 @@ function seccion(extra = {}) {
   );
 }
 
+/* Estructura inicial: todo en blanco para que se arme desde cero */
+function seccionesEnBlanco() {
+  return [seccion({ next: "submit" })];
+}
+
+/* ------------------------------------------------------------------
+   Juego de categorías del DERCAS (Calidad, Servicio al Cliente,
+   Cumplimiento de tiempos, Entrega y recolección). Hoy NO se precarga:
+   las encuestas nacen en blanco. Queda aquí como referencia por si más
+   adelante se quiere ofrecer como plantilla.
+   ------------------------------------------------------------------ */
 function seccionesExternas() {
   return [
     seccion({
@@ -105,7 +153,7 @@ function seccionesExternas() {
       description: "Adaptación, estética, acabado y consistencia de los trabajos.",
       useWorks: true,
       allowedModes: ["general", "mixed", "individual"],
-      allowCaseDimensions: true,
+      allowCaseDimensions: false,
       questions: [
         pregunta({
           id: "q-quality",
@@ -123,7 +171,7 @@ function seccionesExternas() {
       description: "Atención, seguimiento y claridad en la comunicación.",
       useWorks: true,
       allowedModes: ["general", "individual"],
-      allowCaseDimensions: true,
+      allowCaseDimensions: false,
       questions: [
         pregunta({
           id: "q-service",
@@ -203,22 +251,21 @@ function nuevaEncuesta(clasificacion = "Externa", extra = {}) {
       description: externa
         ? "Encuesta mensual para conocer la experiencia de los doctores con los trabajos enviados durante el período anterior."
         : "Encuesta dirigida a los colaboradores de Digital Labs.",
-      intro: externa
-        ? "Queremos conocer su experiencia para continuar mejorando nuestros servicios."
-        : "Sus respuestas nos ayudan a mejorar.",
       classification: clasificacion,
       subtype: externa ? "Servicio y Calidad" : "Liderazgo",
       status: "Borrador",
       respondent: externa ? "Dra. IRENE DE LEON" : "Colaboradores",
-      audienceMode: externa ? "Automática por doctor" : "Por área y supervisor",
+      audienceMode: externa ? "Todos los doctores" : "Por área y supervisor",
       audienceAreas: externa ? [] : ["Área de Administración"],
+      audienceDoctors: [],
       anonymous: !externa,
       channel: externa ? "API WhatsApp" : "Enlace directo",
       whatsappMessage: externa
         ? "Hola {{doctor}}, durante {{periodo}} trabajamos {{casos}} casos para usted. Queremos conocer su experiencia:"
         : "",
-      periodLabel: "Agosto 2026",
-      period: "2026-08",
+      periodAuto: true,
+      periodLabel: PERIODO.etiqueta,
+      period: PERIODO.clave,
       schedule: {
         active: externa,
         repeat: externa ? "Mensual" : "No repetir",
@@ -234,7 +281,7 @@ function nuevaEncuesta(clasificacion = "Externa", extra = {}) {
         statuses: ["enviado"],
         selectedIds: externa ? ["15281", "15292", "15304", "15318", "15330"] : [],
       },
-      sections: externa ? seccionesExternas() : seccionesInternas(),
+      sections: seccionesEnBlanco(),
       createdAt: new Date().toISOString(),
     },
     extra
@@ -271,16 +318,23 @@ function semilla() {
   return [externa, ...internas];
 }
 
-/* Trabajos elegibles agrupados por doctor (RF-ENC-001) */
-function agruparPorDoctor(estados, periodo) {
+/* Trabajos elegibles agrupados por doctor (RF-ENC-001).
+   Con seleccion manual se limita a los doctores y ordenes elegidos. */
+function agruparPorDoctor(estados, periodo, filtro = {}) {
+  const doctores = filtro.doctores && filtro.doctores.length ? filtro.doctores : null;
+  const ordenes = filtro.ordenes && filtro.ordenes.length ? filtro.ordenes : null;
   const mapa = new Map();
+
   TRABAJOS.filter((t) => estados.includes(t.status))
     .filter((t) => !periodo || t.period === periodo)
+    .filter((t) => !doctores || doctores.includes(t.doctor))
+    .filter((t) => !ordenes || ordenes.includes(t.id))
     .forEach((t) => {
       if (!mapa.has(t.doctor)) mapa.set(t.doctor, { doctor: t.doctor, clinic: t.clinic, works: [] });
       mapa.get(t.doctor).works.push(t);
     });
+
   return [...mapa.values()];
 }
 
-module.exports = { AREAS, TRABAJOS, uid, pregunta, seccion, nuevaEncuesta, semilla, agruparPorDoctor };
+module.exports = { AREAS, TRABAJOS, PERIODO, uid, pregunta, seccion, nuevaEncuesta, semilla, agruparPorDoctor, mesAnterior, aplicarPeriodoAuto };

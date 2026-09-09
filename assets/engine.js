@@ -345,8 +345,6 @@
           values: [],
           tags: [],
           comment: "",
-          linkChoice: "",
-          linkedWorks: [],
           workIds: workIds || (workId ? [workId] : []),
         };
       } else if (workIds) {
@@ -367,10 +365,6 @@
           if (question.lowOptionsRequired && !answer.tags.length) return "Seleccione al menos un motivo de mejora.";
           if (question.lowCommentRequired && !answer.comment.trim())
             return "El comentario es obligatorio cuando la calificación es menor a 4 estrellas.";
-          if (question.linkLowRatingToWorks && survey.works.enabled && answer.level === "general" && works.length) {
-            if (!answer.linkChoice) return "Indique si la calificación se relaciona con algún caso en particular.";
-            if (answer.linkChoice === "yes" && !answer.linkedWorks.length) return "Seleccione al menos un trabajo relacionado.";
-          }
         }
         return "";
       }
@@ -423,7 +417,7 @@
           (rating) =>
             `<button type="button" class="${answer.rating >= rating ? "sel" : ""}" data-star="${rating}" aria-label="${rating} estrellas">★</button>`
         )
-        .join("")}<small class="stars-hint">${answer.rating ? esc(ETIQUETAS[answer.rating - 1]) : "Toque para calificar"}</small></div>`;
+        .join("")}${answer.rating ? `<small class="stars-hint">${esc(ETIQUETAS[answer.rating - 1])}</small>` : ""}</div>`;
     }
 
     function chipsHtml(options, selected) {
@@ -454,8 +448,6 @@
       const show = low ? question.lowOptionsRequired : question.highOptionsOptional;
       const comment = low ? question.lowCommentRequired : question.highCommentOptional;
       const prompt = low ? question.lowPrompt : question.highPrompt;
-      const askWorks =
-        low && question.linkLowRatingToWorks && survey.works.enabled && answer.level === "general" && works.length > 0;
 
       return `
         <div class="follow ${low ? "is-low" : "is-high"}">
@@ -464,22 +456,6 @@
             ${show ? chipsHtml(options, answer.tags) : ""}
             ${comment ? `<textarea data-comment rows="3" placeholder="${low ? "Cuéntenos qué ocurrió para poder mejorarlo" : "Si desea, cuéntenos qué hicimos bien"}">${esc(answer.comment)}</textarea>` : ""}
           </div>` : ""}
-          ${askWorks ? `
-            <div class="feedback-block case-link">
-              <b>¿Esta calificación se relaciona con algún caso en particular? <em class="req">obligatorio</em></b>
-              <div class="inline-choice">
-                <label class="${answer.linkChoice === "yes" ? "on" : ""}"><input type="radio" name="link-${esc(answer.key)}" data-link="yes" ${answer.linkChoice === "yes" ? "checked" : ""}> Sí, seleccionar trabajos</label>
-                <label class="${answer.linkChoice === "no" ? "on" : ""}"><input type="radio" name="link-${esc(answer.key)}" data-link="no" ${answer.linkChoice === "no" ? "checked" : ""}> No, es una percepción general</label>
-              </div>
-              ${answer.linkChoice === "yes" ? `<div class="selection-list compact">${works
-                .map(
-                  (work) => `<label class="work-select-card ${answer.linkedWorks.includes(work.id) ? "on" : ""}">
-                    <input type="checkbox" data-linkwork="${attr(work.id)}" ${answer.linkedWorks.includes(work.id) ? "checked" : ""}>
-                    <span><b>Orden #${esc(work.code)}</b><small>${esc(work.patient)} · ${esc(work.product)} · ${esc(work.sent)}</small></span>
-                  </label>`
-                )
-                .join("")}</div>` : ""}
-            </div>` : ""}
         </div>`;
     }
 
@@ -515,7 +491,6 @@
             <div class="question-title">
               <b>${esc(question.text)}${question.required ? " *" : ""}</b>
               ${question.help ? `<small>${esc(question.help)}</small>` : ""}
-              <span class="area-tag">${esc(question.area)}</span>
             </div>
             ${answerControl(question, answer)}
           </div>
@@ -527,11 +502,7 @@
     function screenHeader(screen) {
       const section = screen.sectionId ? findSection(screen.sectionId) : null;
       if (screen.kind === "intro")
-        return {
-          kicker: survey.classification === "Externa" ? "Encuesta de Servicio y Calidad" : "Encuesta interna",
-          title: survey.name,
-          description: "",
-        };
+        return { kicker: survey.subtype || "", title: survey.name, description: "" };
       if (screen.kind === "review")
         return {
           kicker: "Último paso",
@@ -558,8 +529,10 @@
           description: `${work.patient} · ${work.product} · Enviado el ${work.sent}`,
         };
       }
+      /* El titulo de la categoria se muestra una sola vez: como titulo.
+         El kicker queda para la subcategoria de la encuesta. */
       const question = findQuestion(screen.questionId);
-      return { kicker: section.title, title: section.title, description: question.help || section.description };
+      return { kicker: survey.subtype || "", title: section.title, description: section.description };
     }
 
     function screenBody(screen) {
@@ -568,7 +541,6 @@
           <div class="intro-card">
             <p>${esc(survey.description)}</p>
             ${survey.works.enabled && works.length ? `<div class="intro-count"><b>${works.length}</b><span>casos trabajados en ${esc(survey.periodLabel)}</span></div>` : ""}
-            <p class="muted">${esc(survey.intro)}</p>
             ${survey.works.enabled && works.length ? worksTable(works, "Trabajos del período") : ""}
           </div>`;
       }
@@ -660,9 +632,7 @@
                       ? `Orden #${esc(answer.workIds[0] || "")}`
                       : answer.level === "group"
                         ? `${answer.workIds.length} trabajos`
-                        : answer.linkChoice === "yes"
-                          ? `General · ${answer.linkedWorks.length} caso(s)`
-                          : "General";
+                        : "General";
                   return `<div class="review-row"><span>${esc(answer.questionText)}</span><b>${detail}</b><small>${scope}</small></div>`;
                 })
                 .join("")}
@@ -792,8 +762,6 @@
         if (answer.rating && wasLow !== nowLow) {
           answer.tags = [];
           answer.comment = "";
-          answer.linkChoice = "";
-          answer.linkedWorks = [];
         }
         answer.rating = rating;
         state.error = "";
@@ -840,25 +808,6 @@
         render();
         return;
       }
-      const link = target.closest("[data-link]");
-      if (link) {
-        const answer = answerFromNode(link);
-        if (!answer) return;
-        answer.linkChoice = link.dataset.link;
-        if (answer.linkChoice === "no") answer.linkedWorks = [];
-        render();
-        return;
-      }
-      const linkWork = target.closest("[data-linkwork]");
-      if (linkWork) {
-        const answer = answerFromNode(linkWork);
-        if (!answer) return;
-        const list = new Set(answer.linkedWorks);
-        linkWork.checked ? list.add(linkWork.dataset.linkwork) : list.delete(linkWork.dataset.linkwork);
-        answer.linkedWorks = [...list];
-        render();
-        return;
-      }
       const single = target.closest("[data-single]");
       if (single) {
         const answer = answerFromNode(single);
@@ -899,7 +848,8 @@
       return Object.values(state.answers)
         .filter((answer) => answer.rating || answer.value || answer.values.length)
         .map((answer) => {
-          const linked = answer.level === "general" ? answer.linkedWorks : answer.workIds;
+          /* Una evaluación general no se atribuye a órdenes ni a asesoras (RN-ENC-003). */
+          const linked = answer.level === "general" ? [] : answer.workIds;
           const asesoras = [...new Set(worksByIds(linked).map((work) => work.advisor))];
           return {
             pregunta: answer.questionText,
@@ -908,7 +858,7 @@
             valor: answer.values.length ? answer.values.join(", ") : answer.value,
             nivel: answer.level === "general" ? "GENERAL" : "ESPECÍFICA",
             trabajos: linked,
-            asesoras: answer.level === "general" && answer.linkChoice !== "yes" ? [] : asesoras,
+            asesoras: answer.level === "general" ? [] : asesoras,
             motivos: answer.tags,
             comentario: answer.comment,
             fecha: new Date().toISOString(),

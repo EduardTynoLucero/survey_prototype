@@ -22,9 +22,9 @@
 
   const STEPS = [
     ["general", "Datos generales", "Nombre, clasificación y descripción"],
+    ["questions", "Preguntas", "Editor tipo Google Forms"],
     ["audience", "Público", "A quién se dirige y si usa órdenes"],
     ["schedule", "Programación y envío", "Cada cuánto corre y cómo se manda"],
-    ["questions", "Preguntas", "Editor tipo Google Forms"],
     ["review", "Revisión", "Verificar y publicar"],
   ];
 
@@ -43,6 +43,8 @@
     activeQuestionId: "",
     openQuestionId: "",
     selectedWorkId: "15281",
+    openDoctor: "",
+    previewDoctor: "",
     previewOpen: false,
     focusAfterRender: "",
     toastTimer: null,
@@ -149,7 +151,10 @@
     ];
     if (survey.classification === "Externa") {
       items.push(["Mensaje de WhatsApp configurado", survey.channel !== "API WhatsApp" || Boolean(survey.whatsappMessage.trim())]);
-      if (survey.works.enabled) items.push(["Órdenes cargadas para la muestra", survey.works.selectedIds.length > 0]);
+      if (survey.audienceMode === "Selección manual") {
+        items.push(["Doctores seleccionados", (survey.audienceDoctors || []).length > 0]);
+        items.push(["Órdenes seleccionadas", survey.works.selectedIds.length > 0]);
+      }
     } else {
       items.push(["Público interno definido", (survey.audienceAreas || []).length > 0]);
     }
@@ -366,6 +371,16 @@
           renderView();
           return;
         }
+        case "toggle-doctor":
+          state.openDoctor = state.openDoctor === arg ? "" : arg;
+          renderView();
+          return;
+
+        case "preview-doctor":
+          state.previewDoctor = arg;
+          mountPreview();
+          return;
+
         case "clear-works":
           survey.works.selectedIds = [];
           guardar();
@@ -664,6 +679,18 @@
       refreshPreview();
       return;
     }
+    if (target.matches("[data-preview-doctor]")) {
+      state.previewDoctor = target.value;
+      mountPreview();
+      return;
+    }
+    if (target.matches("[data-survey-check]")) {
+      survey[target.dataset.surveyCheck] = target.checked;
+      guardar();
+      renderView();
+      refreshPreview();
+      return;
+    }
     if (target.matches("[data-sched-field]")) {
       survey.schedule[target.dataset.schedField] = target.value;
       guardar();
@@ -704,6 +731,19 @@
     }
     if (target.matches("[data-selected-work]")) {
       survey.works.selectedIds = toggle(survey.works.selectedIds, target.dataset.selectedWork, target.checked);
+      guardar();
+      renderView();
+      refreshPreview();
+      return;
+    }
+    if (target.matches("[data-doctor-pick]")) {
+      const doctor = target.dataset.doctorPick;
+      survey.audienceDoctors = toggle(survey.audienceDoctors || [], doctor, target.checked);
+      const suyas = DL.worksByDoctor(doctor, survey.works.statuses).map((work) => work.id);
+      survey.works.selectedIds = target.checked
+        ? [...new Set([...survey.works.selectedIds, ...suyas])]
+        : survey.works.selectedIds.filter((id) => !suyas.includes(id));
+      if (target.checked) state.openDoctor = doctor;
       guardar();
       renderView();
       refreshPreview();
@@ -1004,11 +1044,14 @@
         <div class="summary-grid">
           <div class="form-grid">
             <label class="field span2"><span>Nombre de la encuesta *</span><input data-survey-field="name" value="${attr(survey.name)}"></label>
-            <label class="field span2"><span>Descripción <small>se muestra al abrir la encuesta</small></span><textarea rows="3" data-survey-field="description">${esc(survey.description)}</textarea></label>
+            <label class="field span2"><span>Descripción <small>es el texto que ve quien responde al abrir la encuesta</small></span><textarea rows="3" data-survey-field="description">${esc(survey.description)}</textarea></label>
             <label class="field"><span>Subcategoría</span><select data-survey-field="subtype">${options(external ? ["Servicio y Calidad", "Encuesta general", "Nuevos productos"] : ["Liderazgo", "Clima laboral", "Capacitación", "Eventos y actividades", "Encuesta general"], survey.subtype)}</select></label>
             <label class="field"><span>Estado</span><select data-survey-field="status">${options(["Borrador", "Activa", "Inactiva"], survey.status)}</select></label>
-            <label class="field"><span>Período visible</span><input data-survey-field="periodLabel" value="${attr(survey.periodLabel)}"></label>
-            <label class="field span2"><span>Mensaje de bienvenida</span><input data-survey-field="intro" value="${attr(survey.intro)}"></label>
+            <div class="field span2">
+              <span>Período evaluado</span>
+              <label class="switch-row"><input type="checkbox" data-survey-check="periodAuto" ${survey.periodAuto !== false ? "checked" : ""}> Automático <small>siempre el mes calendario anterior</small></label>
+              <input data-survey-field="periodLabel" value="${attr(survey.periodLabel)}" ${survey.periodAuto !== false ? "readonly" : ""}>
+            </div>
           </div>
           <aside class="side-summary">
             <div><b>${external ? "Encuesta externa" : "Encuesta interna"}</b><span>${external ? "Se dirige a doctores, usa las órdenes del período y se envía por WhatsApp." : "Se dirige al personal por área o supervisor."}</span></div>
@@ -1041,55 +1084,82 @@
     }
 
     const eligible = DL.eligibleWorks(survey.works.statuses);
-    const doctors = [...new Set(eligible.map((work) => work.doctor))];
+    const manual = survey.audienceMode === "Selección manual";
+    const elegidos = survey.audienceDoctors || [];
+
+    const doctores = [...new Set(eligible.map((work) => work.doctor))].map((doctor) => ({
+      doctor,
+      clinic: (eligible.find((work) => work.doctor === doctor) || {}).clinic || "",
+      works: eligible.filter((work) => work.doctor === doctor),
+    }));
+
     return `
       <section class="page-card">
         <h2 class="card-title"><span class="pink-icon">▣</span> ¿A qué doctores se dirige?</h2>
         <div class="form-grid g4">
-          <label class="field span2"><span>Asignación *</span><select data-survey-field="audienceMode">${options(["Automática por doctor", "Selección manual de doctores", "Enlace abierto"], survey.audienceMode)}</select><small>Automática: se genera una encuesta por cada doctor con trabajos elegibles.</small></label>
-          <label class="field span2"><span>Doctor de muestra <small>para la vista previa</small></span><select data-survey-field="respondent">${options(doctors, survey.respondent)}</select></label>
+          <label class="field span2"><span>Asignación *</span>
+            <select data-survey-field="audienceMode">${options(["Todos los doctores", "Selección manual"], survey.audienceMode)}</select>
+            <small>${manual ? "Solo se enviará a los doctores y las órdenes que marque abajo." : "Se genera una encuesta por cada doctor con trabajos del período."}</small>
+          </label>
+          <div class="field span2"><span>Alcance del período</span>
+            <input value="${doctores.length} doctores · ${eligible.length} órdenes enviadas en ${attr(survey.periodLabel)}" readonly>
+          </div>
         </div>
+
+        <div class="doctor-pick">
+          ${doctores
+            .map((grupo) => {
+              const marcado = manual ? elegidos.includes(grupo.doctor) : true;
+              const abierto = state.openDoctor === grupo.doctor;
+              const suyas = manual
+                ? grupo.works.filter((work) => survey.works.selectedIds.includes(work.id)).length
+                : grupo.works.length;
+              return `
+                <article class="doctor-item ${marcado ? "on" : ""}">
+                  <div class="doctor-head">
+                    ${manual
+                      ? `<label class="doctor-check">
+                          <input type="checkbox" data-doctor-pick="${attr(grupo.doctor)}" ${marcado ? "checked" : ""}>
+                          <span><b>${esc(grupo.doctor)}</b><small>${esc(grupo.clinic)}</small></span>
+                        </label>`
+                      : `<span class="doctor-name"><b>${esc(grupo.doctor)}</b><small>${esc(grupo.clinic)}</small></span>`}
+                    <button class="mini-btn" type="button" data-act="toggle-doctor" data-arg="${attr(grupo.doctor)}">
+                      ${manual ? `${suyas} de ${grupo.works.length} órdenes` : `${grupo.works.length} órdenes`} ${abierto ? "▴" : "▾"}
+                    </button>
+                  </div>
+                  ${abierto ? `
+                    <div class="doctor-works">
+                      ${grupo.works
+                        .map((work) => {
+                          const detalle = `<span><b>Orden #${esc(work.code)} · ${esc(work.product)}</b><small>${esc(work.patient)} · Enviado ${esc(work.sent)} · Asesora: ${esc(work.advisor)}</small></span>`;
+                          return manual
+                            ? `<label class="work-item">
+                                <input class="work-check" type="checkbox" data-selected-work="${attr(work.id)}" ${survey.works.selectedIds.includes(work.id) ? "checked" : ""} ${marcado ? "" : "disabled"}>
+                                ${detalle}
+                              </label>`
+                            : `<div class="work-item plain">${detalle}</div>`;
+                        })
+                        .join("")}
+                      ${manual && !marcado ? `<p class="tiny">Marque al doctor para poder elegir sus órdenes.</p>` : ""}
+                    </div>` : ""}
+                </article>`;
+            })
+            .join("")}
+        </div>
+        <p class="tiny hint-line">${manual
+          ? `${elegidos.length} doctor(es) seleccionados · ${survey.works.selectedIds.length} órdenes a calificar.`
+          : `Se evaluarán las ${eligible.length} órdenes del período. Despliegue cada doctor para ver cuáles.`}</p>
       </section>
 
       <section class="page-card">
         <h2 class="card-title"><span class="pink-icon">▤</span> ¿Esta encuesta lleva órdenes de trabajo?</h2>
         <label class="feature-toggle">
           <input type="checkbox" data-works-check="enabled" ${survey.works.enabled ? "checked" : ""}>
-          <span><b>Sí, la encuesta evalúa trabajos del período</b><small>Habilita jalar las órdenes del mes del doctor. Las modalidades general, mixta e individual se configuran por categoría en el editor.</small></span>
+          <span><b>Sí, la encuesta evalúa trabajos del período</b><small>Se evalúan las órdenes que llegaron a estado ENVIADO. Las modalidades general, mixta e individual se configuran por categoría en el editor.</small></span>
         </label>
-
-        ${survey.works.enabled ? `
-          <div class="form-grid g4 compact-grid">
-            <label class="field span2"><span>Origen de las órdenes</span><select data-works-field="source">${options(["Mes calendario anterior por doctor", "Período manual por doctor", "Selección manual"], survey.works.source)}</select></label>
-            <div class="field span2"><span>Estado elegible</span>
-              <div class="inline-checks">
-                ${["enviado", "facturado", "finalizado"].map((status) => `<label class="check-row"><input type="checkbox" data-status-filter="${status}" ${survey.works.statuses.includes(status) ? "checked" : ""}> ${status}</label>`).join("")}
-              </div>
-            </div>
-          </div>
-
-          <div class="load-works-row">
-            <div><b>${survey.works.selectedIds.length} órdenes cargadas para la vista previa</b><span>Al generar, el sistema agrupa por doctor automáticamente.</span></div>
-            <div class="load-actions">
-              <select id="doctorPick">${options(doctors, survey.respondent)}</select>
-              <button class="btn primary" type="button" data-act="load-month">Jalar órdenes del mes del doctor</button>
-              <button class="btn" type="button" data-act="clear-works">Limpiar</button>
-            </div>
-          </div>
-
-          <div class="work-list">
-            ${eligible
-              .map(
-                (work) => `
-                <label class="work-item">
-                  <input class="work-check" type="checkbox" data-selected-work="${attr(work.id)}" ${survey.works.selectedIds.includes(work.id) ? "checked" : ""}>
-                  <span><b>Orden #${esc(work.code)} · ${esc(work.product)}</b><small>${esc(work.doctor)} · ${esc(work.patient)} · Enviado ${esc(work.sent)} · Asesora: ${esc(work.advisor)}</small></span>
-                  <span class="badge">${esc(work.status)}</span>
-                </label>`
-              )
-              .join("")}
-          </div>
-        ` : `<p class="empty-note">La encuesta se responderá sin asociar calificaciones a órdenes.</p>`}
+        ${survey.works.enabled
+          ? `<p class="tiny hint-line">Origen: ${esc(survey.works.source)}. Al generar, el sistema agrupa por doctor y conserva la asesora de cada orden.</p>`
+          : `<p class="empty-note">La encuesta se responderá sin asociar calificaciones a órdenes.</p>`}
       </section>`;
   }
 
@@ -1147,10 +1217,11 @@
   }
 
   function mensajeArmado(survey) {
+    const alcance = alcancePrevio();
     return String(survey.whatsappMessage || "")
-      .replace(/{{doctor}}/g, survey.respondent)
+      .replace(/{{doctor}}/g, alcance.doctor || survey.respondent)
       .replace(/{{periodo}}/g, survey.periodLabel)
-      .replace(/{{casos}}/g, survey.works.selectedIds.length)
+      .replace(/{{casos}}/g, alcance.works.length)
       .replace(/{{cierre}}/g, survey.schedule.closeDay);
   }
 
@@ -1217,7 +1288,6 @@
           <input class="section-title-input" data-section-field="title" value="${attr(section.title)}" aria-label="Título de la categoría">
           <textarea class="section-description-input" data-section-field="description" rows="1" aria-label="Descripción">${esc(section.description)}</textarea>
           <div class="section-meta-row">
-            <label class="switch-row"><input type="checkbox" data-section-check="active" ${section.active !== false ? "checked" : ""}> Categoría activa</label>
             <span>${section.questions.length} pregunta${section.questions.length === 1 ? "" : "s"}</span>
           </div>
         </div>
@@ -1256,10 +1326,6 @@
                 </label>`).join("")}
             </div>
           </div>
-          <label class="feature-toggle subtle">
-            <input type="checkbox" data-section-check="allowCaseDimensions" ${section.allowCaseDimensions ? "checked" : ""}>
-            <span><b>Permitir elegir qué preguntas evaluar en cada orden</b><small>En una orden específica el doctor marca solo las dimensiones que desea calificar.</small></span>
-          </label>
         ` : `<span class="tiny">Las preguntas de esta categoría se responden una sola vez, sin relacionarlas con una orden ni con una asesora.</span>`}
       </div>`;
   }
@@ -1350,7 +1416,6 @@
             </label>
             <label class="check-row"><input type="checkbox" data-question-check="lowOptionsRequired" ${question.lowOptionsRequired ? "checked" : ""}> Exigir al menos un motivo de mejora</label>
             <label class="check-row"><input type="checkbox" data-question-check="lowCommentRequired" ${question.lowCommentRequired ? "checked" : ""}> Exigir comentario obligatorio</label>
-            ${conTrabajos ? `<label class="check-row"><input type="checkbox" data-question-check="linkLowRatingToWorks" ${question.linkLowRatingToWorks ? "checked" : ""}> Preguntar si se relaciona con casos específicos</label>` : ""}
             <label class="field"><span>Pregunta que verá el doctor</span><input data-question-field="lowPrompt" value="${attr(question.lowPrompt)}"></label>
             ${catalogEditor(question, "improvementOptions", "Catálogo de oportunidades de mejora")}
           </section>
@@ -1377,7 +1442,6 @@
             </select>
             <small>${question.workMode === "none" ? "Queda como percepción general del área." : "Conserva la relación orden → asesora."}</small>
           </label>
-          <label class="field"><span>ID</span><input value="${attr(question.id)}" readonly></label>
           ${starRules}
         </div>
       </div>`;
@@ -1401,7 +1465,7 @@
         <h2 class="card-title">Resumen</h2>
         <div class="review-grid">
           <div><span>Clasificación</span><b>${esc(survey.classification)} · ${esc(survey.subtype)}</b></div>
-          <div><span>Responde</span><b>${esc(survey.respondent)}</b></div>
+          <div><span>Responde</span><b>${esc(isExternal() ? (survey.audienceMode === "Selección manual" ? `${(survey.audienceDoctors || []).length} doctor(es) seleccionados` : "Todos los doctores del período") : survey.respondent)}</b></div>
           <div><span>Canal</span><b>${esc(survey.channel)}</b></div>
           <div><span>Repetición</span><b>${esc(survey.schedule.repeat)}</b></div>
           <div><span>Próxima ejecución</span><b>${esc(survey.schedule.nextRun || "—")}</b></div>
@@ -1666,10 +1730,14 @@ npm install</pre>
           ${wa.qrImagen ? `<img class="wa-qr" src="${wa.qrImagen}" alt="Código QR de WhatsApp">` : `<pre class="wa-qr-text">${esc(wa.qrTexto)}</pre><p class="tiny">Instale <code>qrcode</code> para ver la imagen, o mire el QR en la terminal.</p>`}
         </div>`;
     } else {
+      const sinNavegador = /chrome|chromium|browser|executable|launch/i.test(wa.error || "");
       panel = `
         <div class="wa-panel qr">
-          <b>Conectando con WhatsApp…</b>
+          <b>${sinNavegador ? "No se encontró el navegador" : "Conectando con WhatsApp…"}</b>
           <p>${esc(wa.error || "Espere unos segundos; el código QR aparecerá aquí.")}</p>
+          ${sinNavegador ? `<p>whatsapp-web.js necesita un Chrome. Cierre el servidor y arránquelo indicándole el suyo:</p>
+          <pre>set CHROME_PATH=C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe
+npm start</pre>` : ""}
           <button class="btn" type="button" data-act="wa-conectar">Reintentar</button>
         </div>`;
     }
@@ -1793,12 +1861,41 @@ npm install</pre>
     if (state.previewOpen) mountPreview();
   }
 
+  /* Doctor y órdenes que corresponden a la configuración actual:
+     la vista previa muestra exactamente lo que recibiría ese doctor. */
+  function alcancePrevio() {
+    const survey = state.draft;
+    if (!isExternal() || !survey.works.enabled) {
+      return { doctor: survey.respondent, works: [], doctores: [] };
+    }
+    const manual = survey.audienceMode === "Selección manual";
+    const elegibles = DL.eligibleWorks(survey.works.statuses);
+    let doctores = [...new Set(elegibles.map((work) => work.doctor))];
+    if (manual) doctores = doctores.filter((doctor) => (survey.audienceDoctors || []).includes(doctor));
+
+    const doctor = doctores.includes(state.previewDoctor) ? state.previewDoctor : doctores[0] || "";
+    let works = elegibles.filter((work) => work.doctor === doctor);
+    if (manual) works = works.filter((work) => survey.works.selectedIds.includes(work.id));
+    return { doctor: doctor || survey.respondent, works, doctores };
+  }
+
   function mountPreview() {
     const survey = state.draft;
+    const alcance = alcancePrevio();
+    const externa = survey.classification === "Externa";
+
     els.previewContent.innerHTML = `
       <div class="preview-simulator">
-        <div><b>Así responde ${survey.classification === "Externa" ? "el doctor" : "el colaborador"}</b><span>Es la encuesta real, con sus validaciones.</span></div>
+        <div>
+          <b>Así responde ${externa ? "el doctor" : "el colaborador"}</b>
+          <span>Es la encuesta real, con sus validaciones${alcance.works.length ? ` · ${alcance.works.length} orden(es) del período` : ""}.</span>
+        </div>
         <div class="simulator-group">
+          ${alcance.doctores.length > 1
+            ? `<select class="simulator-select" data-preview-doctor>${alcance.doctores
+                .map((doctor) => `<option ${doctor === alcance.doctor ? "selected" : ""}>${esc(doctor)}</option>`)
+                .join("")}</select>`
+            : ""}
           <button class="simulator-btn" type="button" data-act="preview-reset">↺ Reiniciar</button>
           <button class="simulator-btn" type="button" data-act="public-link">↗ Abrir en pestaña</button>
         </div>
@@ -1806,7 +1903,7 @@ npm install</pre>
       <div class="preview-device">
         <div class="preview-device-top">
           <img src="../assets/LOGO_DLABS2.png" alt="Digital Labs">
-          <div><b>${esc(survey.classification === "Externa" ? "Encuesta de Servicio y Calidad" : "Encuesta interna")}</b><span>${esc(survey.periodLabel)}</span></div>
+          <div><b>${esc(survey.subtype || (externa ? "Encuesta externa" : "Encuesta interna"))}</b><span>${esc(alcance.doctor)} · ${esc(survey.periodLabel)}</span></div>
         </div>
         <div class="preview-device-body" id="previewMount"></div>
       </div>`;
@@ -1814,8 +1911,8 @@ npm install</pre>
     DL.createRuntime({
       mount: document.getElementById("previewMount"),
       survey: DL.clone(survey),
-      works: DL.findWorks(survey.works.selectedIds),
-      respondent: survey.respondent,
+      works: alcance.works,
+      respondent: alcance.doctor,
       compact: true,
       onFinish: async () => {},
     });
