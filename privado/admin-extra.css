@@ -2124,41 +2124,6 @@ code {
   margin-left: auto;
 }
 
-.editor-id {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 34%;
-  padding-left: 9px;
-  border-left: 1px solid var(--ui-border-soft);
-}
-
-.editor-id .badge {
-  flex: 0 0 auto;
-}
-
-.editor-id-txt {
-  min-width: 0;
-  display: grid;
-  line-height: 1.15;
-  text-align: right;
-}
-
-.editor-id-txt b {
-  overflow: hidden;
-  font-size: 11.5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.editor-id-txt small {
-  color: var(--ui-muted);
-  font-size: 9.5px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: .03em;
-}
-
 .editor-modo {
   height: 20px;
   display: inline-flex;
@@ -2879,8 +2844,8 @@ code {
     grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 
-  .editor-id {
-    max-width: 100%;
+  .editor-nombre {
+    white-space: normal;
   }
 }
 
@@ -3245,4 +3210,76 @@ code {
 .dl-page-gap {
   padding: 0 3px;
   color: var(--ui-muted);
+}
+
+/* ===================================================================
+   Editor: los tabs y el menú de tres puntos comparten la misma tira;
+   debajo va solo el nombre de la encuesta, sin caja.
+   =================================================================== */
+.editor-nombre {
+  margin: 0;
+  padding: 2px 2px 0;
+  color: var(--ui-text);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toolbar-strip.editor-top.menu-open {
+  position: relative;
+  z-index: 40;
+}
+
+/* Botón de tres puntos */
+.dl-kebab {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0 4px;
+  border: 1px solid var(--ui-border);
+  border-radius: 2px;
+  background: #fff;
+  color: var(--ui-text);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.dl-kebab:hover,
+.dl-kebab.on {
+  border-color: var(--ui-primary);
+  background: var(--ui-primary-soft);
+  color: var(--ui-primary-dark);
+}
+
+/* El desplegable se alinea a la derecha del botón */
+.menu-pop--fin {
+  right: 0;
+  left: auto;
+  min-width: 128px;
+}
+
+/* Pasos sin numeración: solo el nombre del paso */
+.edit-shell .wizard-step button {
+  padding: 0 13px;
+}
+
+/* Sin números, el avance se lee por el color: pendiente apagado,
+   ya visitado en texto normal, el actual en rosa. */
+.edit-shell .wizard-step .step-text b {
+  color: var(--ui-muted);
+}
+
+.edit-shell .wizard-step.done .step-text b {
+  color: var(--ui-text);
+}
+
+.edit-shell .wizard-step.active .step-text b {
+  color: var(--ui-primary-dark);
 }

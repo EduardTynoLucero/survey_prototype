@@ -105,10 +105,9 @@
     els.appView.innerHTML = '<p class="empty-note">Conectando con el servidor…</p>';
     try {
       await recargarBase();
-      /* La bandeja se necesita desde el arranque: es la vista de quien
-         no administra el módulo y el contador del tab de quien sí. */
-      await cargarBandeja();
-      if (esJefe()) await cargarMisResultados();
+      /* Bandeja y resultados se necesitan desde el arranque: son los
+         contadores de dos de los tres tabs del módulo. */
+      await cargarPersonal();
       renderApp();
       setInterval(refrescarEstado, 4000);
     } catch (error) {
@@ -230,11 +229,10 @@
     return `
       <div class="dl-toolbar">
         <button class="dl-filter-toggle ${abierto ? "is-open" : ""}" type="button" data-act="toggle-filtros">
-          <span class="dl-ico">⚙</span>${abierto ? "Ocultar filtros" : "Ver filtros"}
+          ${abierto ? "Ocultar filtros" : "Ver filtros"}
           ${cuenta ? `<span class="dl-filter-count">${cuenta}</span>` : ""}
-          <span class="dl-chevron">⌄</span>
         </button>
-        <button class="dl-filter-clear" type="button" data-act="limpiar-filtros" ${cuenta ? "" : "disabled"}>✕ Borrar filtros</button>
+        <button class="dl-filter-clear" type="button" data-act="limpiar-filtros" ${cuenta ? "" : "disabled"}>Borrar filtros</button>
         ${extra}
       </div>`;
   }
@@ -566,7 +564,7 @@
     try {
       if (view === "survey-list") {
         state.surveys = await DL.api.encuestas();
-        cargarBandeja();
+        cargarPersonal().then(renderView);
       }
       if (view === "sends" && state.draft) state.instancias = await DL.api.instancias(state.draft.id);
       if (view === "answers") state.respuestas = await DL.api.respuestas(state.answersSurveyId || undefined);
@@ -1599,7 +1597,7 @@
     const visibles = esAdmin() ? modules : modules.filter(([id]) => id === "surveys");
     els.moduleNav.innerHTML =
       visibles
-        .map(([id, label]) => `<button class="module-tab ${state.module === id ? "active" : ""}" type="button" data-module="${id}">▨ ${label}</button>`)
+        .map(([id, label]) => `<button class="module-tab ${state.module === id ? "active" : ""}" type="button" data-module="${id}">${label}</button>`)
         .join("") + (esAdmin() ? waChip() : "");
   }
 
@@ -1617,7 +1615,7 @@
       clase = "qr";
       texto = "WhatsApp conectando…";
     }
-    return `<button class="wa-chip ${clase}" id="waChip" type="button" data-view="whatsapp" title="Ver estado de WhatsApp">● ${esc(texto)}</button>`;
+    return `<button class="wa-chip ${clase}" id="waChip" type="button" data-view="whatsapp" title="Ver estado de WhatsApp">${esc(texto)}</button>`;
   }
 
   function renderSidebar() {
@@ -1625,7 +1623,7 @@
       els.sidebar.innerHTML = `
         <div class="side-title">TRABAJOS</div>
         <div class="side-search"><input placeholder="Código (ej: 15281)"></div>
-        <button class="side-link active" type="button" data-view="work-list">▧ Trabajos</button>`;
+        <button class="side-link active" type="button" data-view="work-list">Trabajos</button>`;
       return;
     }
 
@@ -1633,30 +1631,26 @@
     if (state.module === "lab") {
       els.sidebar.innerHTML = `
         <div class="side-title">LABORATORIO</div>
-        <button class="side-link ${state.view === "employees" ? "active" : ""}" type="button" data-view="employees">▧ Empleados</button>
-        <button class="side-link ${state.view === "whatsapp" ? "active" : ""}" type="button" data-view="whatsapp">◱ WhatsApp</button>`;
+        <button class="side-link ${state.view === "employees" ? "active" : ""}" type="button" data-view="employees">Empleados</button>
+        <button class="side-link ${state.view === "whatsapp" ? "active" : ""}" type="button" data-view="whatsapp">WhatsApp</button>`;
       return;
     }
 
-    /* El colaborador solo tiene su bandeja; el jefe además sus resultados */
+    /* Quien no administra el módulo solo ve lo suyo. La navegación vive
+       en los tabs, así que aquí va una sola entrada. */
     if (!esAdmin()) {
       els.sidebar.innerHTML = `
         <div class="side-title">ENCUESTAS</div>
-        <button class="side-link ${state.view === "inbox" ? "active" : ""}" type="button" data-view="inbox">✎ Bandeja de encuestas</button>
-        ${esJefe() ? `<button class="side-link ${state.view === "my-results" ? "active" : ""}" type="button" data-view="my-results">✓ Mis resultados</button>` : ""}`;
+        <button class="side-link active" type="button" data-view="inbox">Encuestas</button>`;
       return;
     }
 
     els.sidebar.innerHTML = `
       <div class="side-title">ENCUESTAS</div>
-      <button class="side-link ${["survey-list", "survey-edit"].includes(state.view) ? "active" : ""}" type="button" data-view="survey-list">▧ Encuestas</button>
-      ${/* La bandeja vive en su pestaña; aquí solo aparece cuando ya se entró en ella */ ""}
-      ${["inbox", "my-results"].includes(state.view)
-        ? `<button class="side-link ${state.view === "inbox" ? "active" : ""}" type="button" data-view="inbox">✎ Bandeja de encuestas</button>
-           ${esJefe() ? `<button class="side-link ${state.view === "my-results" ? "active" : ""}" type="button" data-view="my-results">✓ Mis resultados</button>` : ""}`
-        : ""}
-      <button class="side-link ${["results-list", "result-detail"].includes(state.view) ? "active" : ""}" type="button" data-view="results-list">✓ Resultados de encuestas</button>
-      <div class="side-foot"><button class="mini-btn" type="button" data-act="reset-demo">↺ Restaurar demo</button></div>`;
+      ${/* Bandeja, Mis encuestas y Mis resultados viven en sus tres pestañas */ ""}
+      <button class="side-link ${["survey-list", "survey-edit", "inbox", "my-results"].includes(state.view) ? "active" : ""}" type="button" data-view="survey-list">Encuestas</button>
+      <button class="side-link ${["results-list", "result-detail"].includes(state.view) ? "active" : ""}" type="button" data-view="results-list">Resultados de encuestas</button>
+      <div class="side-foot"><button class="mini-btn" type="button" data-act="reset-demo">Restaurar demo</button></div>`;
   }
 
   function renderView() {
@@ -1702,15 +1696,21 @@
   /* ==================================================================
      ENCUESTAS · Mis resultados (jefes de área)
      ================================================================== */
-  async function cargarMisResultados() {
+  /* La API trae la bandeja y los resultados juntos: se guardan los dos
+     para que los tres tabs muestren sus contadores al instante. */
+  async function cargarPersonal() {
     if (!sesion) return;
     try {
       const datos = await DL.api.portalBandeja(sesion.id);
+      state.bandeja = datos.bandeja || [];
       state.misResultados = datos.resultados || [];
     } catch (error) {
+      state.bandeja = [];
       state.misResultados = [];
     }
   }
+
+  const cargarMisResultados = cargarPersonal;
 
   function renderMisResultados() {
     const list = state.misResultados || [];
@@ -1723,7 +1723,9 @@
       ${list.length === 0
         ? `<section class="dl-card">
              <div class="dl-table-wrap">
-               <table class="dl-table"><tbody><tr><td colspan="7">Todavía no hay resultados de su equipo.</td></tr></tbody></table>
+               <table class="dl-table"><tbody><tr><td colspan="7">${esJefe()
+                 ? "Todavía no hay resultados. Aparecerán cuando su equipo complete una encuesta en la que usted es el evaluado."
+                 : "Aquí verá el resultado de las encuestas en las que usted sea el evaluado. Se llena cuando tiene personal a cargo y ese equipo responde su encuesta."}</td></tr></tbody></table>
              </div>
            </section>`
         : `<section class="dl-card">
@@ -1739,7 +1741,7 @@
                        <td><span class="dl-badge">${r.asignadas}</span></td>
                        <td><span class="dl-badge ${r.respuestas ? "ok" : "off"}">${r.respuestas}</span></td>
                        <td><b class="${r.escala === "Regular" ? "wk-bad" : "wk-good"}">${esc(r.promedio)}</b> <i>${esc(r.escala)}</i></td>
-                       <td class="dl-col-opts"><button class="dl-mini" type="button" data-act="result-detail" data-arg="${esc(r.id)}">◎ Ver detalle</button></td>
+                       <td class="dl-col-opts"><button class="dl-mini" type="button" data-act="result-detail" data-arg="${esc(r.id)}">Ver detalle</button></td>
                      </tr>`).join("")}
                  </tbody>
                </table>
@@ -1749,18 +1751,10 @@
   }
 
   /* ==================================================================
-     ENCUESTAS · Bandeja de quien está usando el sistema
+     ENCUESTAS · Mis encuestas: las asignadas a quien está usando el sistema
      Aquí responde su propia encuesta interna, sin salir del módulo.
      ================================================================== */
-  async function cargarBandeja() {
-    if (!sesion) return;
-    try {
-      const datos = await DL.api.portalBandeja(sesion.id);
-      state.bandeja = datos.bandeja || [];
-    } catch (error) {
-      state.bandeja = [];
-    }
-  }
+  const cargarBandeja = cargarPersonal;
 
   function renderBandejaInterna() {
     /* Si está respondiendo, se muestra la encuesta y nada más */
@@ -1797,7 +1791,7 @@
                     <td>${esc(item.supervisor || "—")}</td>
                     <td>${item.preguntas}</td>
                     <td><span class="dl-badge warn">${esc(item.state)}</span></td>
-                    <td class="dl-col-opts"><button class="dl-mini" type="button" data-act="responder-bandeja" data-arg="${attr(item.instanceId)}">✎ Responder</button></td>
+                    <td class="dl-col-opts"><button class="dl-mini" type="button" data-act="responder-bandeja" data-arg="${attr(item.instanceId)}">Responder</button></td>
                   </tr>`).join("")}
               </tbody>
             </table>
@@ -1833,7 +1827,7 @@
       <div class="dl-tabs">
         <div class="dl-tabs-list">${tabsEncuestas("inbox")}</div>
         <div class="dl-tabs-actions">
-          <button class="dl-tab-action" type="button" data-act="cerrar-respuesta">← Volver a mi bandeja</button>
+          <button class="dl-tab-action" type="button" data-act="cerrar-respuesta">Volver a mis encuestas</button>
         </div>
       </div>
 
@@ -1876,13 +1870,23 @@
     });
   }
 
-  /* Los dos tabs del módulo: la configuración y la bandeja de quien entró */
+  /* Los tres tabs del módulo */
+  /* Los tres tabs del módulo, desde el punto de vista de quien entró:
+     lo que le toca responder, las encuestas que administra y cómo lo
+     evaluaron a él. */
+  /* Los tres tabs del módulo:
+       Bandeja encuestas -> todas las encuestas del módulo (administración)
+       Mis encuestas     -> solo las que le asignaron a quien entró
+       Mis resultados    -> el resultado de las encuestas en las que él
+                            fue el evaluado
+     Quien no administra el módulo ve únicamente los dos últimos. */
   function tabsEncuestas(vista, total) {
-    const pendientes = (state.bandeja || []).filter((i) => !i.respondida).length;
+    const asignadas = (state.bandeja || []).filter((i) => !i.respondida).length;
+    const resultados = (state.misResultados || []).length;
     return `
-      ${esAdmin() ? `<button class="dl-tab ${vista === "survey-list" ? "is-active" : ""}" type="button" data-view="survey-list">Encuestas${total != null ? ` (${total})` : ""}</button>` : ""}
-      <button class="dl-tab ${vista === "inbox" ? "is-active" : ""}" type="button" data-view="inbox">Bandeja de encuestas${pendientes ? ` <i class="dl-pend">${pendientes}</i>` : ""}</button>
-      ${esJefe() ? `<button class="dl-tab ${vista === "my-results" ? "is-active" : ""}" type="button" data-view="my-results">Mis resultados</button>` : ""}`;
+      ${esAdmin() ? `<button class="dl-tab ${["survey-list", "survey-edit"].includes(vista) ? "is-active" : ""}" type="button" data-view="survey-list">Bandeja encuestas${total != null ? ` (${total})` : ""}</button>` : ""}
+      <button class="dl-tab ${vista === "inbox" ? "is-active" : ""}" type="button" data-view="inbox">Mis encuestas${asignadas ? ` <i class="dl-pend">${asignadas}</i>` : ""}</button>
+      <button class="dl-tab ${vista === "my-results" ? "is-active" : ""}" type="button" data-view="my-results">Mis resultados${resultados ? ` (${resultados})` : ""}</button>`;
   }
 
   function renderSurveyList() {
@@ -1895,7 +1899,7 @@
         <div class="dl-tabs-list">${tabsEncuestas("survey-list", all.length)}</div>
         <div class="dl-tabs-actions">
           <div class="menu-wrap">
-            <button class="dl-tab-action dl-tab-action--primary" type="button" data-menu="nueva">＋ Nueva encuesta ▾</button>
+            <button class="dl-tab-action dl-tab-action--primary" type="button" data-menu="nueva">Nueva encuesta</button>
             ${state.openMenu === "nueva" ? `
               <div class="menu-pop nueva">
                 <button type="button" data-act="create" data-arg="Interna">Interna</button>
@@ -1951,13 +1955,13 @@
                       <td><span class="dl-badge ${survey.status === "Activa" ? "ok" : survey.status === "Inactiva" ? "off" : "warn"}">${esc(survey.status.toUpperCase())}</span></td>
                       <td class="dl-col-opts">
                         <div class="menu-wrap">
-                          <button class="dl-mini ${state.openMenu === "s-" + survey.id ? "on" : ""}" type="button" data-menu="s-${esc(survey.id)}">Opciones ▾</button>
+                          <button class="dl-mini ${state.openMenu === "s-" + survey.id ? "on" : ""}" type="button" data-menu="s-${esc(survey.id)}">Opciones</button>
                           ${state.openMenu === "s-" + survey.id ? `
                             <div class="menu-pop">
-                              <button type="button" data-act="sends" data-arg="${esc(survey.id)}">✈ Envíos</button>
-                              ${respondidas ? `<button type="button" data-act="answers-survey" data-arg="${esc(survey.id)}">✓ Respuestas (${respondidas})</button>` : ""}
+                              <button type="button" data-act="sends" data-arg="${esc(survey.id)}">Envíos</button>
+                              ${respondidas ? `<button type="button" data-act="answers-survey" data-arg="${esc(survey.id)}">Respuestas (${respondidas})</button>` : ""}
                               <button type="button" data-act="toggle-status" data-arg="${esc(survey.id)}">${survey.status === "Activa" ? "✕ Desactivar" : "✓ Activar"}</button>
-                              <button class="danger" type="button" data-act="delete" data-arg="${esc(survey.id)}">🗑 Eliminar</button>
+                              <button class="danger" type="button" data-act="delete" data-arg="${esc(survey.id)}">Eliminar</button>
                             </div>` : ""}
                         </div>
                       </td>
@@ -1988,9 +1992,11 @@
       envios: cuerpoEnvios,
     }[state.editorTab] || cuerpoDetalle;
 
+    const abierto = state.openMenu === "editor-opts";
+
     return `
       <div class="edit-shell ${editando ? "" : "modo-consulta"}">
-        <div class="toolbar-strip editor-top">
+        <div class="toolbar-strip editor-top ${abierto ? "menu-open" : ""}">
           <div class="editor-tabs">
             ${EDITOR_TABS.map(([id, label]) => {
               const extra =
@@ -2002,21 +2008,21 @@
           </div>
 
           <div class="editor-acciones">
-            ${editando
-              ? `<span class="editor-modo">Modo edición</span>`
-              : `<button class="mini-btn primary" type="button" data-act="editar-encuesta" title="Editar">✎ Editar</button>`}
-            <button class="mini-btn" type="button" data-act="preview">◎ Vista previa</button>
-            <button class="link-action" type="button" data-view="survey-list">← Regresar</button>
-          </div>
-
-          <div class="editor-id">
-            <span class="badge ${isExternal() ? "pink" : "neutral"}">${esc(survey.classification.toUpperCase())}</span>
-            <span class="editor-id-txt">
-              <b id="editorTitle">${esc(survey.name)}</b>
-              <small>${esc(survey.subtype)}</small>
-            </span>
+            ${editando ? `<span class="editor-modo">Modo edición</span>` : ""}
+            <div class="menu-wrap">
+              <button class="dl-kebab ${abierto ? "on" : ""}" type="button" data-menu="editor-opts" title="Más opciones" aria-label="Más opciones">⋯</button>
+              ${abierto ? `
+                <div class="menu-pop menu-pop--fin">
+                  ${editando ? "" : `<button type="button" data-act="editar-encuesta">Editar</button>`}
+                  <button type="button" data-act="preview">Vista previa</button>
+                </div>` : ""}
+            </div>
+            <button class="link-action" type="button" data-view="survey-list">Regresar</button>
           </div>
         </div>
+
+        ${/* Solo el nombre, suelto entre las dos tiras de tabs */ ""}
+        <h1 class="editor-nombre" id="editorTitle">${esc(survey.name)}</h1>
 
         ${cuerpo()}
       </div>`;
@@ -2032,19 +2038,9 @@
       porInstancia[r.instanceId].items.push(r);
     });
     const grupos = Object.values(porInstancia);
-    const notas = lista.filter((r) => r.calificacion).map((r) => r.calificacion);
-    const promedio = notas.length ? (notas.reduce((a, b) => a + b, 0) / notas.length).toFixed(2) : "—";
 
     return `
-      <section class="res-cards">
-        <div class="res-card"><span>Encuestas completadas</span><b>${grupos.length}</b></div>
-        <div class="res-card"><span>Respuestas</span><b>${lista.length}</b></div>
-        <div class="res-card"><span>Con nota baja</span><b>${lista.filter((r) => r.calificacion && r.calificacion < 4).length}</b></div>
-        <div class="res-card res-card--total"><span>Promedio</span><b>${esc(promedio)}</b><i>${notas.length ? "de las notas" : "sin notas"}</i></div>
-      </section>
-
       <section class="dl-card">
-        <div class="wk-block-head"><div><b>Respuestas de esta encuesta</b></div><span class="wk-count">${lista.length}</span></div>
         <div class="dl-table-wrap">
           <table class="dl-table">
             <thead><tr><th>${isExternal() ? "Doctor" : "Colaborador"}</th><th>Período</th><th>Pregunta</th><th>Área</th><th>Calificación</th><th>Nivel</th><th>Motivos</th><th>Comentario</th></tr></thead>
@@ -2086,14 +2082,14 @@
               ? wa.conectado
                 ? `Conectado como <b>+${esc(wa.numero)}</b>; los envíos de prueba llegan a <b>+${esc(state.estado.destino)}</b>.`
                 : "WhatsApp no está conectado: los mensajes quedan en la bitácora."
-              : "Cada colaborador la responde desde su Bandeja de encuestas."
+              : "Cada colaborador la responde desde su tab Mis encuestas."
           }</span>
         </div>
         <div class="ribbon-tags">
-          <button class="btn primary" type="button" data-act="ejecutar-ahora">▶ Ejecutar ahora</button>
+          <button class="btn primary" type="button" data-act="ejecutar-ahora">Ejecutar ahora</button>
           <button class="btn" type="button" data-act="generar">Solo generar</button>
-          ${externa ? `<button class="btn" type="button" data-act="enviar">✈ Enviar</button>` : ""}
-          <button class="btn" type="button" data-act="cerrar-ventana">■ Cerrar ventana</button>
+          ${externa ? `<button class="btn" type="button" data-act="enviar">Enviar</button>` : ""}
+          <button class="btn" type="button" data-act="cerrar-ventana">Cerrar ventana</button>
         </div>
       </div>
 
@@ -2112,7 +2108,7 @@
             </tr></thead>
             <tbody>
               ${instancias.length === 0
-                ? `<tr><td colspan="9">Aún no hay envíos. Pulse <b>▶ Ejecutar ahora</b>.</td></tr>`
+                ? `<tr><td colspan="9">Aún no hay envíos. Pulse <b>Ejecutar ahora</b>.</td></tr>`
                 : instancias.map((item) => `
                     <tr>
                       <td><b>${esc(item.doctor)}</b> <i>${esc(item.periodLabel)}</i></td>
@@ -2124,8 +2120,8 @@
                       <td>${esc(item.openedAt || "—")}</td>
                       <td>${esc(item.finishedAt || "—")}</td>
                       <td class="dl-col-opts">
-                        <button class="dl-mini" type="button" data-act="open-instance" data-arg="${esc(item.id)}">↗ Abrir</button>
-                        ${externa ? `<button class="dl-mini" type="button" data-act="ver-mensaje" data-arg="${esc(item.id)}">◱ Mensaje</button>` : ""}
+                        <button class="dl-mini" type="button" data-act="open-instance" data-arg="${esc(item.id)}">Abrir</button>
+                        ${externa ? `<button class="dl-mini" type="button" data-act="ver-mensaje" data-arg="${esc(item.id)}">Mensaje</button>` : ""}
                       </td>
                     </tr>`).join("")}
             </tbody>
@@ -2145,7 +2141,6 @@
         ${STEPS.map(([id, label], index) => `
           <li class="wizard-step ${state.step === id ? "active" : ""} ${index < stepIndex ? "done" : ""}">
             <button type="button" data-step="${id}">
-              <span class="step-num">${index < stepIndex ? "✓" : index + 1}</span>
               <span class="step-text"><b>${label}</b></span>
             </button>
           </li>`).join("")}
@@ -2155,10 +2150,10 @@
 
       ${state.editando ? `
         <div class="form-actions">
-          <button class="dercas-btn ok" type="button" data-act="crear-encuesta">✓ ${state.esNueva ? "Crear encuesta" : "Guardar cambios"}</button>
-          <button class="dercas-btn" type="button" data-act="guardar-borrador">↓ Guardar como borrador</button>
-          ${isExternal() ? `<button class="dercas-btn" type="button" data-act="crear-y-enviar">➤ ${state.esNueva ? "Crear y enviar" : "Guardar y enviar"}</button>` : ""}
-          <button class="dercas-btn cancel" type="button" data-act="cancelar">✕ Cancelar</button>
+          <button class="dercas-btn ok" type="button" data-act="crear-encuesta">${state.esNueva ? "Crear encuesta" : "Guardar cambios"}</button>
+          <button class="dercas-btn" type="button" data-act="guardar-borrador">Guardar como borrador</button>
+          ${isExternal() ? `<button class="dercas-btn" type="button" data-act="crear-y-enviar">${state.esNueva ? "Crear y enviar" : "Guardar y enviar"}</button>` : ""}
+          <button class="dercas-btn cancel" type="button" data-act="cancelar">Cancelar</button>
         </div>` : ""}`;
   }
 
@@ -2167,7 +2162,7 @@
     const external = isExternal();
     return `
       <section class="page-card">
-        <h2 class="card-title"><span class="pink-icon">▧</span> Datos generales</h2>
+        <h2 class="card-title">Datos generales</h2>
         <div class="form-grid g4">
           <label class="field"><span>Nombre de la encuesta *</span><input data-survey-field="name" value="${attr(survey.name)}"></label>
           <label class="field"><span>Subcategoría</span><select data-survey-field="subtype">${options(external ? ["Servicio y Calidad", "Encuesta general", "Nuevos productos"] : ["Liderazgo", "Clima laboral", "Capacitación", "Eventos y actividades", "Encuesta general"], survey.subtype)}</select></label>
@@ -2217,7 +2212,7 @@
 
     return `
       <section class="page-card">
-        <h2 class="card-title"><span class="pink-icon">▣</span> ¿Quiénes van a responder?</h2>
+        <h2 class="card-title">¿Quiénes van a responder?</h2>
         <div class="form-grid g4">
           <label class="field"><span>Modo de asignación *</span>
             <select data-survey-field="assignMode">${options(MODOS_ASIGNACION, survey.assignMode)}</select>
@@ -2282,8 +2277,8 @@
                           ${manual
                             ? ""
                             : dentro
-                              ? `<button class="dl-mini" type="button" data-act="quitar-resp" data-arg="${attr(persona.id)}" title="Quitar de la encuesta">🗑</button>`
-                              : `<button class="dl-mini" type="button" data-act="devolver-resp" data-arg="${attr(persona.id)}" title="Volver a incluir">↺</button>`}
+                              ? `<button class="dl-mini" type="button" data-act="quitar-resp" data-arg="${attr(persona.id)}" title="Quitar de la encuesta">Quitar</button>`
+                              : `<button class="dl-mini" type="button" data-act="devolver-resp" data-arg="${attr(persona.id)}" title="Volver a incluir">Incluir</button>`}
                         </td>
                       </tr>`;
                   }).join("")}
@@ -2309,7 +2304,7 @@
 
     return `
       <section class="page-card">
-        <h2 class="card-title"><span class="pink-icon">▣</span> ¿A qué doctores se dirige?</h2>
+        <h2 class="card-title">¿A qué doctores se dirige?</h2>
         <div class="form-grid g4">
           <label class="field"><span>Asignación *</span>
             <select data-survey-field="audienceMode">${options(["Todos los doctores", "Selección manual"], survey.audienceMode)}</select>
@@ -2343,7 +2338,7 @@
                         </label>`
                       : `<span class="doctor-name"><b>${esc(grupo.doctor)}</b><small>${esc(grupo.clinic)}</small></span>`}
                     <button class="mini-btn" type="button" data-act="toggle-doctor" data-arg="${attr(grupo.doctor)}">
-                      ${manual ? `${suyas} de ${grupo.works.length} órdenes` : `${grupo.works.length} órdenes`} ${abierto ? "▴" : "▾"}
+                      ${manual ? `${suyas} de ${grupo.works.length} órdenes` : `${grupo.works.length} órdenes`}${abierto ? " · ocultar" : ""}
                     </button>
                   </div>
                   ${abierto ? `
@@ -2371,7 +2366,7 @@
       </section>
 
       <section class="page-card">
-        <h2 class="card-title"><span class="pink-icon">▤</span> ¿Esta encuesta lleva órdenes de trabajo?</h2>
+        <h2 class="card-title">¿Esta encuesta lleva órdenes de trabajo?</h2>
         <label class="feature-toggle">
           <input type="checkbox" data-works-check="enabled" ${survey.works.enabled ? "checked" : ""}>
           <span><b>Sí, la encuesta evalúa trabajos del período</b><small>Se evalúan las órdenes que llegaron a estado ENVIADO. Las modalidades general, mixta e individual se configuran por categoría en el editor.</small></span>
@@ -2390,7 +2385,7 @@
 
     return `
       <section class="page-card">
-        <h2 class="card-title"><span class="pink-icon">▣</span> ¿Cada cuánto se ejecuta?</h2>
+        <h2 class="card-title">¿Cada cuánto se ejecuta?</h2>
         <div class="form-grid g4">
           <label class="field"><span>Repetición *</span>
             <select data-sched-field="repeat">${options(["No repetir", "Mensual", "Trimestral", "Anual"], survey.schedule.repeat)}</select>
@@ -2427,13 +2422,13 @@
             <input id="minutosPrueba" type="number" min="1" max="60" value="2" style="width:70px">
             <span class="tiny">minutos</span>
             <button class="btn" type="button" data-act="probar-agenda">Programar prueba</button>
-            <button class="btn primary" type="button" data-act="ejecutar-ahora">▶ Ejecutar ahora</button>
+            <button class="btn primary" type="button" data-act="ejecutar-ahora">Ejecutar ahora</button>
           </div>
         </div>
       </section>
 
       <section class="page-card">
-        <h2 class="card-title"><span class="pink-icon">✈</span> Envío</h2>
+        <h2 class="card-title">Envío</h2>
         <div class="form-grid g4">
           <label class="field"><span>Canal *</span><select data-survey-field="channel">${options(external ? ["API WhatsApp", "Enlace directo"] : ["Enlace directo", "Correo interno"], survey.channel)}</select></label>
           ${survey.channel === "API WhatsApp"
@@ -2494,7 +2489,7 @@
                   </div>`
                 )
                 .join("")}
-              <button class="outline-add" type="button" data-act="add-section">＋ Agregar categoría</button>
+              <button class="outline-add" type="button" data-act="add-section">Agregar categoría</button>
             </aside>
             <div class="forms-canvas"><div class="section-stack">${survey.sections.map(renderSectionCard).join("")}</div></div>
           </div>
@@ -2510,8 +2505,8 @@
         <div class="section-badge">
           <span>Categoría ${index + 1} de ${total}</span>
           <span class="section-tools">
-            <button class="text-btn" type="button" data-act="move-section" data-arg="${section.id}:up" ${index === 0 ? "disabled" : ""}>↑</button>
-            <button class="text-btn" type="button" data-act="move-section" data-arg="${section.id}:down" ${index === total - 1 ? "disabled" : ""}>↓</button>
+            <button class="text-btn" type="button" data-act="move-section" data-arg="${section.id}:up" ${index === 0 ? "disabled" : ""}>Subir</button>
+            <button class="text-btn" type="button" data-act="move-section" data-arg="${section.id}:down" ${index === total - 1 ? "disabled" : ""}>Bajar</button>
             <button class="text-btn danger" type="button" data-act="delete-section" data-arg="${section.id}">Eliminar categoría</button>
           </span>
         </div>
@@ -2525,7 +2520,7 @@
         ${sectionBehavior(section)}
         ${section.questions.map((question, qIndex) => renderQuestionCard(section, question, qIndex)).join("")}
         <div class="section-route">
-          <button class="mini-btn primary" type="button" data-act="add-question" data-arg="${section.id}">＋ Agregar pregunta</button>
+          <button class="mini-btn primary" type="button" data-act="add-question" data-arg="${section.id}">Agregar pregunta</button>
           <span>Después de esta categoría</span>
           <select data-section-field="next">
             <option value="continue" ${section.next === "continue" ? "selected" : ""}>Ir a la siguiente categoría</option>
@@ -2586,8 +2581,8 @@
         ${answerControl(question)}
         ${motorPanel(section, question)}
         <div class="question-footer">
-          <button class="text-btn" type="button" data-act="move-question" data-arg="${question.id}:up" ${index === 0 ? "disabled" : ""}>↑ Subir</button>
-          <button class="text-btn" type="button" data-act="move-question" data-arg="${question.id}:down" ${index === total - 1 ? "disabled" : ""}>↓ Bajar</button>
+          <button class="text-btn" type="button" data-act="move-question" data-arg="${question.id}:up" ${index === 0 ? "disabled" : ""}>Subir</button>
+          <button class="text-btn" type="button" data-act="move-question" data-arg="${question.id}:down" ${index === total - 1 ? "disabled" : ""}>Bajar</button>
           <button class="text-btn" type="button" data-act="duplicate-question" data-arg="${question.id}">Duplicar</button>
           <button class="text-btn danger" type="button" data-act="delete-question" data-arg="${question.id}">Eliminar</button>
           <label class="switch-row"><span>Activa</span><input type="checkbox" data-question-check="active" ${question.active ? "checked" : ""}></label>
@@ -2688,7 +2683,7 @@
 
     return `
       <section class="page-card">
-        <h2 class="card-title"><span class="pink-icon">✓</span> Lista de verificación</h2>
+        <h2 class="card-title">Lista de verificación</h2>
         <div class="publish-check">${items.map(([label, ok]) => `<div class="${ok ? "ok" : "no"}"><span>${ok ? "✓" : "!"}</span>${esc(label)}</div>`).join("")}</div>
         ${pending ? `<p class="empty-note">Faltan ${pending} punto(s) por completar.</p>` : `<p class="ready-note">Todo listo. Ya puede crear la encuesta con el botón <b>Crear encuesta</b>.</p>`}
       </section>
@@ -2709,9 +2704,9 @@
           <div class="area-map-list">${Object.entries(byArea).map(([area, count]) => `<span><b>${count}</b> ${esc(area)}</span>`).join("")}</div>
         </div>
         <div class="review-actions">
-          <button class="btn" type="button" data-act="preview">◎ Probar la encuesta</button>
-          <button class="btn" type="button" data-act="public-link">↗ Abrir enlace público</button>
-          <button class="btn primary" type="button" data-act="sends" data-arg="">✈ Ir a envíos</button>
+          <button class="btn" type="button" data-act="preview">Probar la encuesta</button>
+          <button class="btn" type="button" data-act="public-link">Abrir enlace público</button>
+          <button class="btn primary" type="button" data-act="sends" data-arg="">Ir a envíos</button>
         </div>
       </section>`;
   }
@@ -2720,7 +2715,7 @@
   function renderSendsPicker() {
     return `
       <section class="page-card">
-        <h2 class="card-title"><span class="pink-icon">✈</span> Envíos</h2>
+        <h2 class="card-title">Envíos</h2>
         <p class="empty-note">Elija una encuesta para ver o ejecutar sus envíos.</p>
         <div class="review-actions">
           ${state.surveys.map((survey) => `<button class="btn" type="button" data-act="sends" data-arg="${esc(survey.id)}">${esc(survey.name)}</button>`).join("")}
@@ -2742,8 +2737,8 @@
           <span class="tiny">Próxima ejecución: ${esc(survey.schedule.nextRun || "sin agenda")}</span>
         </div>
         <div>
-          <button class="mini-btn" type="button" data-act="edit" data-arg="${esc(survey.id)}">✎ Editar</button>
-          <button class="link-action" type="button" data-view="survey-list">← Regresar</button>
+          <button class="mini-btn" type="button" data-act="edit" data-arg="${esc(survey.id)}">Editar</button>
+          <button class="link-action" type="button" data-view="survey-list">Regresar</button>
         </div>
       </div>
 
@@ -2755,10 +2750,10 @@
           }</span>
         </div>
         <div class="ribbon-tags">
-          <button class="btn primary" type="button" data-act="ejecutar-ahora">▶ Ejecutar ahora</button>
+          <button class="btn primary" type="button" data-act="ejecutar-ahora">Ejecutar ahora</button>
           <button class="btn" type="button" data-act="generar">Solo generar</button>
-          <button class="btn" type="button" data-act="enviar">✈ Enviar</button>
-          <button class="btn" type="button" data-act="cerrar-ventana">■ Cerrar ventana</button>
+          <button class="btn" type="button" data-act="enviar">Enviar</button>
+          <button class="btn" type="button" data-act="cerrar-ventana">Cerrar ventana</button>
         </div>
       </div>
 
@@ -2785,8 +2780,8 @@
                         <td><span class="tiny">${esc(item.openedAt || "—")}</span></td>
                         <td><span class="tiny">${esc(item.finishedAt || "—")}</span></td>
                         <td class="row-actions">
-                          <button class="mini-btn primary" type="button" data-act="open-instance" data-arg="${esc(item.id)}">↗ Abrir enlace</button>
-                          <button class="mini-btn" type="button" data-act="ver-mensaje" data-arg="${esc(item.id)}">◱ Mensaje</button>
+                          <button class="mini-btn primary" type="button" data-act="open-instance" data-arg="${esc(item.id)}">Abrir enlace</button>
+                          <button class="mini-btn" type="button" data-act="ver-mensaje" data-arg="${esc(item.id)}">Mensaje</button>
                         </td>
                       </tr>`
                     )
@@ -2817,8 +2812,8 @@
           <button class="dl-tab is-active" type="button">Respuestas${dueña ? ` · ${esc(dueña.name)}` : ""}</button>
         </div>
         <div class="dl-tabs-actions">
-          ${state.answersSurveyId ? `<button class="dl-tab-action" type="button" data-act="sends" data-arg="${esc(state.answersSurveyId)}">✈ Envíos</button>` : ""}
-          <button class="dl-tab-action" type="button" data-view="survey-list">← Regresar</button>
+          ${state.answersSurveyId ? `<button class="dl-tab-action" type="button" data-act="sends" data-arg="${esc(state.answersSurveyId)}">Envíos</button>` : ""}
+          <button class="dl-tab-action" type="button" data-view="survey-list">Regresar</button>
         </div>
       </div>
       <div class="dercas-ribbon">
@@ -2830,7 +2825,7 @@
             .map(
               ([id, grupo]) => `
               <section class="page-card answer-card">
-                <h2 class="card-title"><span class="pink-icon">✓</span> ${esc(grupo.doctor)} <small>${esc(grupo.period)} · ${esc(grupo.fecha || "")}</small></h2>
+                <h2 class="card-title">${esc(grupo.doctor)} <small>${esc(grupo.period)} · ${esc(grupo.fecha || "")}</small></h2>
                 <div class="answer-list">
                   ${grupo.items
                     .map(
@@ -3053,11 +3048,10 @@ npm start</pre>` : ""}
         <div class="dl-filters">
           <div class="dl-toolbar">
             <button class="dl-filter-toggle ${state.filtrosTrabajosOpen ? "is-open" : ""}" type="button" data-act="toggle-filtros-trabajo">
-              <span class="dl-ico">⚙</span>${state.filtrosTrabajosOpen ? "Ocultar filtros" : "Ver filtros"}
+              ${state.filtrosTrabajosOpen ? "Ocultar filtros" : "Ver filtros"}
               ${cuenta ? `<span class="dl-filter-count">${cuenta}</span>` : ""}
-              <span class="dl-chevron">⌄</span>
             </button>
-            <button class="dl-filter-clear" type="button" data-act="limpiar-filtros-trabajo" ${cuenta ? "" : "disabled"}>✕ Borrar filtros</button>
+            <button class="dl-filter-clear" type="button" data-act="limpiar-filtros-trabajo" ${cuenta ? "" : "disabled"}>Borrar filtros</button>
             ${derecha}
           </div>
           ${state.filtrosTrabajosOpen ? `
@@ -3105,11 +3099,11 @@ npm start</pre>` : ""}
                     <td><span class="dl-badge ${eligible ? "ok" : "warn"}">${esc(work.status)}</span></td>
                     <td class="dl-col-opts">
                       <div class="menu-wrap">
-                        <button class="dl-mini ${state.openMenu === "w-" + work.id ? "on" : ""}" type="button" data-menu="w-${esc(work.id)}">Opciones ▾</button>
+                        <button class="dl-mini ${state.openMenu === "w-" + work.id ? "on" : ""}" type="button" data-menu="w-${esc(work.id)}">Opciones</button>
                         ${state.openMenu === "w-" + work.id ? `
                           <div class="menu-pop">
-                            <button type="button" data-act="work-detail" data-arg="${esc(work.id)}">▤ Ver trabajo</button>
-                            <button type="button" data-act="survey-from-work" data-arg="${esc(work.id)}" ${eligible ? "" : "disabled"}>✚ Encuesta del doctor</button>
+                            <button type="button" data-act="work-detail" data-arg="${esc(work.id)}">Ver trabajo</button>
+                            <button type="button" data-act="survey-from-work" data-arg="${esc(work.id)}" ${eligible ? "" : "disabled"}>Encuesta del doctor</button>
                           </div>` : ""}
                       </div>
                     </td>
@@ -3283,7 +3277,7 @@ npm start</pre>` : ""}
           <button class="dl-tab is-active" type="button">Empleados (${list.length})</button>
         </div>
         <div class="dl-tabs-actions">
-          <button class="dl-tab-action" type="button" data-view="whatsapp">◱ WhatsApp</button>
+          <button class="dl-tab-action" type="button" data-view="whatsapp">WhatsApp</button>
         </div>
       </div>
 
@@ -3291,11 +3285,10 @@ npm start</pre>` : ""}
         <div class="dl-filters">
           <div class="dl-toolbar">
             <button class="dl-filter-toggle ${state.filtrosEmpOpen ? "is-open" : ""}" type="button" data-act="toggle-filtros-emp">
-              <span class="dl-ico">⚙</span>${state.filtrosEmpOpen ? "Ocultar filtros" : "Ver filtros"}
+              ${state.filtrosEmpOpen ? "Ocultar filtros" : "Ver filtros"}
               ${cuenta ? `<span class="dl-filter-count">${cuenta}</span>` : ""}
-              <span class="dl-chevron">⌄</span>
             </button>
-            <button class="dl-filter-clear" type="button" data-act="limpiar-filtros-emp" ${cuenta ? "" : "disabled"}>✕ Borrar filtros</button>
+            <button class="dl-filter-clear" type="button" data-act="limpiar-filtros-emp" ${cuenta ? "" : "disabled"}>Borrar filtros</button>
           </div>
           ${state.filtrosEmpOpen ? `
             <div class="dl-filter-panel">
@@ -3379,11 +3372,11 @@ npm start</pre>` : ""}
 
     return `
       <div class="emp-head">
-        <button class="emp-back" type="button" data-view="employees">← Regresar</button>
+        <button class="emp-back" type="button" data-view="employees">Regresar</button>
         <h1>${esc(persona.name)}</h1>
         <span class="dl-badge ${persona.active ? "ok" : "off"}">${persona.active ? "Activo" : "Inactivo"}</span>
         <span class="emp-head-role">${esc(persona.position)} · ${esc(persona.area)}</span>
-        <button class="emp-edit" type="button" data-act="emp-editar" title="Editar">✎</button>
+        <button class="emp-edit" type="button" data-act="emp-editar" title="Editar">Editar</button>
       </div>
 
       <div class="dl-tabs">
@@ -3585,7 +3578,7 @@ npm start</pre>` : ""}
           <button class="dl-tab is-active" type="button">Resultados de encuestas (${list.length})</button>
         </div>
         <div class="dl-tabs-actions">
-          <button class="dl-tab-action" type="button" data-view="survey-list">▧ Encuestas</button>
+          <button class="dl-tab-action" type="button" data-view="survey-list">Encuestas</button>
         </div>
       </div>
 
@@ -3612,7 +3605,7 @@ npm start</pre>` : ""}
                   <td><span class="dl-badge ${r.respuestas ? "ok" : "off"}">${r.respuestas}</span></td>
                   <td><b class="${r.escala === "Regular" ? "wk-bad" : "wk-good"}">${esc(r.promedio)}</b> <i>${esc(r.escala)}</i></td>
                   <td><span class="dl-badge ${r.origen === "Motor de encuestas" ? "pink" : "off"}">${esc(r.origen)}</span></td>
-                  <td class="dl-col-opts"><button class="dl-mini" type="button" data-act="result-detail" data-arg="${esc(r.id)}">◎ Ver detalle</button></td>
+                  <td class="dl-col-opts"><button class="dl-mini" type="button" data-act="result-detail" data-arg="${esc(r.id)}">Ver detalle</button></td>
                 </tr>`).join("")}
             </tbody>
           </table>
@@ -3631,7 +3624,7 @@ npm start</pre>` : ""}
           <button class="dl-tab is-active" type="button">Detalle</button>
         </div>
         <div class="dl-tabs-actions">
-          <button class="dl-tab-action" type="button" data-view="${state.volverA || "results-list"}">← Regresar</button>
+          <button class="dl-tab-action" type="button" data-view="${state.volverA || "results-list"}">Regresar</button>
         </div>
       </div>
 
@@ -3711,7 +3704,7 @@ npm start</pre>` : ""}
           <button class="dl-tab" type="button" data-act="work-findings">Hallazgos</button>
         </div>
         <div class="dl-tabs-actions">
-          <button class="dl-tab-action" type="button" data-act="survey-from-work" data-arg="${esc(work.id)}" ${eligible ? "" : "disabled"}>✚ Encuesta del doctor</button>
+          <button class="dl-tab-action" type="button" data-act="survey-from-work" data-arg="${esc(work.id)}" ${eligible ? "" : "disabled"}>Encuesta del doctor</button>
           <button class="dl-tab-action" type="button" data-view="work-list">Volver</button>
         </div>
       </div>
@@ -3876,8 +3869,8 @@ npm start</pre>` : ""}
                 .map((doctor) => `<option ${doctor === alcance.doctor ? "selected" : ""}>${esc(doctor)}</option>`)
                 .join("")}</select>`
             : ""}
-          <button class="simulator-btn" type="button" data-act="preview-reset">↺ Reiniciar</button>
-          <button class="simulator-btn" type="button" data-act="public-link">↗ Abrir en pestaña</button>
+          <button class="simulator-btn" type="button" data-act="preview-reset">Reiniciar</button>
+          <button class="simulator-btn" type="button" data-act="public-link">Abrir en pestaña</button>
         </div>
       </div>
       <div class="preview-device">
