@@ -2005,18 +2005,20 @@
                     : "";
               return `<button class="editor-tab ${state.editorTab === id ? "is-active" : ""}" type="button" data-act="editor-tab" data-arg="${id}">${label}${extra}</button>`;
             }).join("")}
-          </div>
 
-          <div class="editor-acciones">
-            ${editando ? `<span class="editor-modo">Modo edición</span>` : ""}
+            ${/* Las opciones van pegadas al último tab */ ""}
             <div class="menu-wrap">
               <button class="dl-kebab ${abierto ? "on" : ""}" type="button" data-menu="editor-opts" title="Más opciones" aria-label="Más opciones">⋯</button>
               ${abierto ? `
-                <div class="menu-pop menu-pop--fin">
+                <div class="menu-pop">
                   ${editando ? "" : `<button type="button" data-act="editar-encuesta">Editar</button>`}
                   <button type="button" data-act="preview">Vista previa</button>
                 </div>` : ""}
             </div>
+          </div>
+
+          <div class="editor-acciones">
+            ${editando ? `<span class="editor-modo">Modo edición</span>` : ""}
             <button class="link-action" type="button" data-view="survey-list">Regresar</button>
           </div>
         </div>
@@ -2166,7 +2168,7 @@
         <div class="form-grid g4">
           <label class="field"><span>Nombre de la encuesta *</span><input data-survey-field="name" value="${attr(survey.name)}"></label>
           <label class="field"><span>Subcategoría</span><select data-survey-field="subtype">${options(external ? ["Servicio y Calidad", "Encuesta general", "Nuevos productos"] : ["Liderazgo", "Clima laboral", "Capacitación", "Eventos y actividades", "Encuesta general"], survey.subtype)}</select></label>
-          <label class="field span2"><span>Descripción <small>lo que ve quien abre la encuesta</small></span><textarea rows="2" data-survey-field="description">${esc(survey.description)}</textarea></label>
+          <label class="field span2"><span>Descripción</span><textarea rows="2" data-survey-field="description">${esc(survey.description)}</textarea></label>
           ${!external ? `
             <div class="field span4"><span>Sugerencias</span>
               <label class="switch-row"><input type="checkbox" data-survey-check="suggestions" ${survey.suggestions !== false ? "checked" : ""}> Comentario general al final de la encuesta.</label>
@@ -2176,7 +2178,7 @@
         ${survey.works.enabled ? `
           <div class="periodo-box">
             <div class="periodo-head">
-              <div><b>Período evaluado</b><span>Define qué órdenes entran en la encuesta.</span></div>
+              <div><b>Período evaluado</b></div>
               <label class="switch-row"><input type="checkbox" data-survey-check="periodAuto" ${survey.periodAuto !== false ? "checked" : ""}> Automático</label>
             </div>
             ${survey.periodAuto !== false ? `
@@ -2188,7 +2190,6 @@
                 <label class="field span2"><span>Período</span><input value="${attr(etiquetaPeriodo())}" readonly></label>
               </div>
             `}
-            <p class="tiny">Con este período hay <b>${elegibles().length}</b> orden(es) enviadas, de <b>${[...new Set(elegibles().map((w) => w.doctor))].length}</b> doctor(es).</p>
           </div>
         ` : ""}
       </section>`;
@@ -2308,7 +2309,6 @@
         <div class="form-grid g4">
           <label class="field"><span>Asignación *</span>
             <select data-survey-field="audienceMode">${options(["Todos los doctores", "Selección manual"], survey.audienceMode)}</select>
-            <small>${manual ? "Solo se enviará a los doctores y las órdenes que marque abajo." : "Se genera una encuesta por cada doctor con trabajos del período."}</small>
           </label>
           <div class="field span3"><span>Alcance del período</span>
             <input value="${doctores.length} doctores · ${eligible.length} órdenes enviadas en ${attr(etiquetaPeriodo())}" readonly>
@@ -2462,35 +2462,7 @@
     return `
       <section class="page-card">
         <div class="forms-board">
-          <div class="forms-dercas-strip">
-            <span><b>Tipo:</b> ${esc(survey.classification)} / ${esc(survey.subtype)}</span>
-            <span><b>Responde:</b> ${esc(survey.respondent)}</span>
-            <span><b>Órdenes:</b> ${survey.works.enabled ? `${survey.works.selectedIds.length} cargadas` : "no utiliza"}</span>
-            <span><b>Período:</b> ${esc(etiquetaPeriodo())}</span>
-            <span><b>Preguntas:</b> ${survey.sections.reduce((total, seccion) => total + seccion.questions.length, 0)}</span>
-          </div>
-
           <div class="editor-layout">
-            <aside class="outline-rail">
-              <div class="outline-head">Estructura</div>
-              ${survey.sections
-                .map(
-                  (section, index) => `
-                  <div class="outline-section ${state.activeSectionId === section.id ? "active" : ""}">
-                    <button type="button" class="outline-sec-btn" data-act="focus-question" data-arg="${esc(section.questions[0].id)}">
-                      <b>${index + 1}. ${esc(section.title)}</b>
-                      <small>${section.questions.length} pregunta(s)${section.useWorks ? " · con órdenes" : ""}</small>
-                    </button>
-                    <div class="outline-questions">
-                      ${section.questions
-                        .map((question) => `<button type="button" class="outline-q ${state.activeQuestionId === question.id ? "active" : ""}" data-act="focus-question" data-arg="${esc(question.id)}" title="${attr(question.text)}">${esc(question.text)}</button>`)
-                        .join("")}
-                    </div>
-                  </div>`
-                )
-                .join("")}
-              <button class="outline-add" type="button" data-act="add-section">Agregar categoría</button>
-            </aside>
             <div class="forms-canvas"><div class="section-stack">${survey.sections.map(renderSectionCard).join("")}</div></div>
           </div>
         </div>
@@ -2508,6 +2480,7 @@
             <button class="text-btn" type="button" data-act="move-section" data-arg="${section.id}:up" ${index === 0 ? "disabled" : ""}>Subir</button>
             <button class="text-btn" type="button" data-act="move-section" data-arg="${section.id}:down" ${index === total - 1 ? "disabled" : ""}>Bajar</button>
             <button class="text-btn danger" type="button" data-act="delete-section" data-arg="${section.id}">Eliminar categoría</button>
+            <button class="text-btn" type="button" data-act="add-section">Agregar categoría</button>
           </span>
         </div>
         <div class="forms-card section-head-card">
@@ -2533,26 +2506,29 @@
   function sectionBehavior(section) {
     const survey = draft();
     if (!survey.works.enabled) {
-      return `<div class="forms-card section-behavior compact-behavior"><b>Sin órdenes de trabajo</b><span>Las respuestas se registran como percepción general y se envían al área responsable de cada pregunta.</span></div>`;
+      return `<div class="forms-card section-behavior compact-behavior"><b>Sin órdenes de trabajo</b></div>`;
     }
+    /* El título hace de etiqueta: la casilla va sola, sin texto al lado */
     return `
       <div class="forms-card section-behavior">
         <div class="behavior-head">
-          <div><b>¿Esta categoría se evalúa sobre los trabajos?</b><span>Si la activa, antes de responder se le pregunta al doctor cómo desea evaluar.</span></div>
-          <label class="switch-row"><input type="checkbox" data-section-check="useWorks" ${section.useWorks ? "checked" : ""}> Usar órdenes</label>
+          <div><b>¿Esta categoría se evalúa sobre los trabajos?</b></div>
+          <label class="switch-row" title="Evaluar esta categoría sobre las órdenes del período">
+            <input type="checkbox" data-section-check="useWorks" ${section.useWorks ? "checked" : ""}>
+          </label>
         </div>
         ${section.useWorks ? `
           <div class="mode-config compact">
-            <div><b>¿Cómo podrá responder el doctor en “${esc(section.title)}”?</b><span>Si solo deja una, no verá la pantalla de elección.</span></div>
+            <div><b>¿Cómo podrá responder el doctor en “${esc(section.title)}”?</b></div>
             <div class="mode-check-grid">
               ${["general", "mixed", "individual"].map((mode) => `
                 <label class="mode-check ${(section.allowedModes || []).includes(mode) ? "selected" : ""}">
                   <input type="checkbox" data-section-mode="${mode}" ${(section.allowedModes || []).includes(mode) ? "checked" : ""}>
-                  <span><b>${DL.MODE_LABELS[mode]}</b><small>${DL.MODE_HELP[mode]}</small></span>
+                  <span><b>${DL.MODE_LABELS[mode]}</b></span>
                 </label>`).join("")}
             </div>
           </div>
-        ` : `<span class="tiny">Las preguntas de esta categoría se responden una sola vez, sin relacionarlas con una orden ni con una asesora.</span>`}
+        ` : ""}
       </div>`;
   }
 

@@ -3283,3 +3283,65 @@ code {
 .edit-shell .wizard-step.active .step-text b {
   color: var(--ui-primary-dark);
 }
+
+/* ===================================================================
+   Editor de preguntas sin riel de estructura: el lienzo ocupa todo
+   el ancho de la pantalla.
+   =================================================================== */
+.edit-shell .editor-layout {
+  grid-template-columns: minmax(0, 1fr);
+  padding: 8px;
+}
+
+.edit-shell .forms-canvas {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* El kebab va dentro de la tira de tabs, pegado a Envíos */
+.editor-tabs {
+  align-items: center;
+}
+
+.editor-tabs .menu-wrap {
+  margin-left: 6px;
+}
+
+.editor-tabs .dl-kebab {
+  height: 22px;
+  width: 22px;
+}
+
+.editor-tabs .menu-pop {
+  left: 0;
+  right: auto;
+  min-width: 128px;
+}
+
+/* "Agregar categoría" comparte fila con "Eliminar categoría" */
+.edit-shell .section-badge .section-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+/* El bloque de "¿se evalúa sobre los trabajos?" queda en una sola línea:
+   el título a la izquierda y la casilla sola a la derecha. */
+.edit-shell .section-behavior .behavior-head {
+  align-items: center;
+}
+
+.edit-shell .section-behavior .behavior-head .switch-row {
+  gap: 0;
+}
+
+.edit-shell .section-behavior.compact-behavior {
+  padding: 6px 12px;
+}
+
+.edit-shell .mode-config.compact > div:first-child b {
+  font-size: 11px;
+}
