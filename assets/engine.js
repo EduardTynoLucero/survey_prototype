@@ -56,12 +56,25 @@
   DL.api = {
     estado: () => pedir("GET", "/api/estado"),
     trabajos: () => pedir("GET", "/api/trabajos"),
+    empleados: () => pedir("GET", "/api/empleados"),
+    empleado: (id) => pedir("GET", `/api/empleados/${encodeURIComponent(id)}`),
+    catalogos: () => pedir("GET", "/api/catalogos"),
+    respondedores: (area, modo) =>
+      pedir("GET", `/api/respondedores?area=${encodeURIComponent(area)}&modo=${encodeURIComponent(modo || "Por supervisor")}`),
+    resultados: () => pedir("GET", "/api/resultados"),
+    resultado: (id) => pedir("GET", `/api/resultados/${encodeURIComponent(id)}`),
+    portalLogin: (correo) => pedir("POST", "/api/portal/login", { correo }),
+    portalPersonal: () => pedir("GET", "/api/portal/personal"),
+    portalBandeja: (id) => pedir("GET", `/api/portal/${encodeURIComponent(id)}/bandeja`),
+    encuestasDeTrabajo: (id) => pedir("GET", `/api/trabajos/${encodeURIComponent(id)}/encuesta`),
     mensajes: () => pedir("GET", "/api/mensajes"),
     reiniciar: () => pedir("POST", "/api/reiniciar"),
 
     encuestas: () => pedir("GET", "/api/encuestas"),
     encuesta: (id) => pedir("GET", `/api/encuestas/${id}`),
+    plantilla: (classification) => pedir("POST", "/api/plantilla", { classification }),
     crearEncuesta: (classification) => pedir("POST", "/api/encuestas", { classification }),
+    crearDesdeBorrador: (encuesta) => pedir("POST", "/api/encuestas", encuesta),
     guardarEncuesta: (encuesta) => pedir("PUT", `/api/encuestas/${encuesta.id}`, encuesta),
     borrarEncuesta: (id) => pedir("DELETE", `/api/encuestas/${id}`),
     duplicarEncuesta: (id) => pedir("POST", `/api/encuestas/${id}/duplicar`),
@@ -133,6 +146,17 @@
     const [dia, mes, anio] = String(fecha).split("/");
     return `${anio}-${mes}-${dia}`;
   };
+
+  /* Mes calendario anterior, para el botón rápido "del período" */
+  (function periodoAnterior() {
+    const hoy = new Date();
+    const d = new Date(hoy.getFullYear(), hoy.getMonth() - 1, 1);
+    const anio = d.getFullYear();
+    const mes = String(d.getMonth() + 1).padStart(2, "0");
+    const ultimo = String(new Date(anio, d.getMonth() + 1, 0).getDate()).padStart(2, "0");
+    DL.PERIODO_DESDE = `${anio}-${mes}-01`;
+    DL.PERIODO_HASTA = `${anio}-${mes}-${ultimo}`;
+  })();
 
   DL.enRango = (work, desde, hasta) => {
     if (!desde && !hasta) return true;
@@ -522,7 +546,7 @@
     function screenHeader(screen) {
       const section = screen.sectionId ? findSection(screen.sectionId) : null;
       if (screen.kind === "intro")
-        return { kicker: survey.subtype || "", title: survey.name, description: "" };
+        return { kicker: "", title: survey.name, description: "" };
       if (screen.kind === "review")
         return {
           kicker: "Último paso",
@@ -550,9 +574,8 @@
         };
       }
       /* El titulo de la categoria se muestra una sola vez: como titulo.
-         El kicker queda para la subcategoria de la encuesta. */
-      const question = findQuestion(screen.questionId);
-      return { kicker: survey.subtype || "", title: section.title, description: section.description };
+         La subcategoria solo se ve en la cabecera de la vista previa. */
+      return { kicker: "", title: section.title, description: section.description };
     }
 
     function screenBody(screen) {
@@ -697,7 +720,7 @@
           </div>
           ${state.error ? `<div class="error" role="alert">${esc(state.error)}</div>` : ""}
           <section class="section-panel">
-            <p class="section-kicker">${esc(head.kicker)}</p>
+            ${head.kicker ? `<p class="section-kicker">${esc(head.kicker)}</p>` : ""}
             <h1>${esc(head.title)}</h1>
             ${head.description ? `<p class="screen-description">${esc(head.description)}</p>` : ""}
             <div class="rt-content">${screenBody(screen)}</div>

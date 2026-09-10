@@ -21,7 +21,12 @@ if not exist "node_modules" (
 
 echo.
 echo Iniciando el servidor...
-echo Sistema privado: http://localhost:3000/privado/
+echo.
+echo   Sistema (administracion)  http://localhost:3000/privado/
+echo   Portal del colaborador    http://localhost:3000/portal/
+echo   Encuesta del doctor       http://localhost:3000/doctor/
+echo.
+echo Deje esta ventana abierta mientras usa el sistema.
 echo.
 node server/server.js
 pause

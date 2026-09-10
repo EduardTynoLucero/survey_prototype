@@ -22,15 +22,79 @@ function marcaActual() {
   };
 }
 
-/** Proxima fecha en que corre la generacion, como texto */
+const MESES = [
+  "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+  "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
+];
+
+const MESES_POR_REPETICION = { Mensual: 1, Trimestral: 3, Anual: 12 };
+
+function aFecha(iso) {
+  if (!iso || !String(iso).includes("-")) return null;
+  const [anio, mes, dia] = String(iso).split("-").map(Number);
+  return new Date(anio, mes - 1, dia);
+}
+
+const hora = (texto, porDefecto) => String(texto || porDefecto || "07:00").slice(0, 5);
+
+/* Todo sale de la ventana de disponibilidad:
+     día de generación = día de la fecha de inicio
+     hora de generación = hora de inicio
+     cierre            = fecha y hora de fin */
+function derivar(encuesta) {
+  const prog = encuesta.schedule || {};
+  const inicio = aFecha(prog.startDate);
+  const fin = aFecha(prog.endDate);
+  return {
+    activa: encuesta.status === "Activa",
+    repite: prog.repeat !== "No repetir",
+    salto: MESES_POR_REPETICION[prog.repeat] || 1,
+    dia: inicio ? inicio.getDate() : new Date().getDate(),
+    desde: hora(prog.startTime, "07:00"),
+    hasta: hora(prog.endTime, "23:59"),
+    inicio,
+    fin,
+  };
+}
+
+/* "10 Septiembre 2026 de 07:00 A 23:59" */
+function ventana(fecha, desde, hasta) {
+  if (!fecha) return "";
+  return `${fecha.getDate()} ${MESES[fecha.getMonth()]} ${fecha.getFullYear()} de ${desde} A ${hasta}`;
+}
+
+/* Cuándo corre la encuesta por primera vez.
+   Sin repetición manda la fecha de inicio; con repetición, el día
+   configurado dentro del mes de esa fecha (o el siguiente si ya pasó). */
+function primeraEjecucion(encuesta) {
+  const d = derivar(encuesta);
+  return ventana(d.inicio || new Date(), d.desde, d.hasta);
+}
+
+/** Próxima corrida, como texto */
 function proximaEjecucion(encuesta) {
   const prog = encuesta.schedule || {};
-  if (!prog.active || prog.repeat === "No repetir") return "";
-  const [hh, mm] = String(prog.time || "07:00").split(":").map(Number);
-  const hoy = new Date();
-  let candidata = new Date(hoy.getFullYear(), hoy.getMonth(), Number(prog.generationDay || 8), hh || 0, mm || 0, 0);
-  if (candidata <= hoy) candidata = new Date(hoy.getFullYear(), hoy.getMonth() + 1, Number(prog.generationDay || 8), hh || 0, mm || 0, 0);
-  return candidata.toLocaleString("es-GT", { hour12: false });
+  const d = derivar(encuesta);
+  const [hh, mm] = d.desde.split(":").map(Number);
+  const ahora = new Date();
+
+  /* Sin repetición: corre una sola vez en la fecha y hora de inicio */
+  if (!d.repite) {
+    if (!d.inicio) return "";
+    if (prog.lastRun) return "No se repite";
+    const cuando = new Date(d.inicio.getFullYear(), d.inicio.getMonth(), d.inicio.getDate(), hh || 0, mm || 0);
+    return cuando < ahora ? "Pendiente de ejecutar" : ventana(d.inicio, d.desde, d.hasta);
+  }
+
+  let candidata = new Date(ahora.getFullYear(), ahora.getMonth(), d.dia, hh || 0, mm || 0);
+  while (candidata <= ahora) candidata = new Date(candidata.getFullYear(), candidata.getMonth() + d.salto, d.dia, hh || 0, mm || 0);
+  if (d.inicio && candidata < d.inicio) candidata = new Date(d.inicio.getFullYear(), d.inicio.getMonth(), d.dia, hh || 0, mm || 0);
+
+  if (d.fin && candidata > new Date(d.fin.getFullYear(), d.fin.getMonth(), d.fin.getDate(), 23, 59)) {
+    return "Terminó la disponibilidad";
+  }
+
+  return ventana(candidata, d.desde, d.hasta);
 }
 
 async function ejecutarGeneracion(encuesta, motivo) {
@@ -42,19 +106,55 @@ async function ejecutarGeneracion(encuesta, motivo) {
   }
   encuesta.schedule.lastRun = operaciones.ahora();
   encuesta.schedule.nextRun = proximaEjecucion(encuesta);
+  encuesta.schedule.firstRun = primeraEjecucion(encuesta);
   db.encuestas.guardar(encuesta);
   console.log(`[agenda] ${instancias.length} encuesta(s) generada(s), ${envios.length} envío(s)`);
   return { instancias, envios };
+}
+
+const hora2 = (texto, porDefecto) => String(texto || porDefecto || "07:00").slice(0, 5);
+
+/* Hoy está dentro de la ventana de disponibilidad */
+function enVentana(prog) {
+  const hoy = new Date();
+  const soloHoy = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate());
+  const inicio = aFecha(prog.startDate);
+  const fin = aFecha(prog.endDate);
+  if (inicio && soloHoy < inicio) return false;
+  if (fin && soloHoy > fin) return false;
+  return true;
+}
+
+function esHoy(iso) {
+  const fecha = aFecha(iso);
+  if (!fecha) return false;
+  const hoy = new Date();
+  return fecha.getFullYear() === hoy.getFullYear() && fecha.getMonth() === hoy.getMonth() && fecha.getDate() === hoy.getDate();
 }
 
 async function revisar() {
   const { dia, hora, clave } = marcaActual();
   for (const encuesta of db.encuestas.listar()) {
     const prog = encuesta.schedule || {};
-    if (encuesta.status !== "Activa" || !prog.active) continue;
+    const d = derivar(encuesta);
+    if (!d.activa) continue;
 
-    /* Generacion (RN-ENC-001) */
-    if (prog.repeat !== "No repetir" && Number(prog.generationDay) === dia && prog.time === hora) {
+    const dentroDeVentana = enVentana(prog);
+
+    /* Sin repetición: corre una sola vez, el día de inicio a partir de su hora */
+    if (!d.repite) {
+      if (!prog.lastRun && dentroDeVentana && hora >= d.desde && esHoy(prog.startDate)) {
+        try {
+          await ejecutarGeneracion(encuesta, "agenda (única)");
+        } catch (error) {
+          console.error("[agenda] error al generar:", error.message);
+        }
+      }
+      continue;
+    }
+
+    /* Generación (RN-ENC-001): el día y la hora salen del inicio de disponibilidad */
+    if (dentroDeVentana && d.dia === dia && d.desde === hora) {
       if (prog.lastMark !== clave) {
         prog.lastMark = clave;
         db.encuestas.guardar(encuesta);
@@ -67,8 +167,8 @@ async function revisar() {
       continue;
     }
 
-    /* Cierre al terminar el dia de cierre (RN-ENC-006) */
-    if (Number(prog.closeDay) === dia && hora === "23:59" && prog.closeMark !== clave) {
+    /* Cierre (RN-ENC-006): al terminar la ventana de disponibilidad */
+    if (esHoy(prog.endDate) && hora === d.hasta && prog.closeMark !== clave) {
       prog.closeMark = clave;
       const cerradas = operaciones.cerrar(encuesta);
       db.encuestas.guardar(encuesta);
@@ -113,4 +213,4 @@ function iniciar() {
   console.log(`[agenda] Activa (revisa cada ${config.INTERVALO_AGENDA}s)`);
 }
 
-module.exports = { iniciar, revisar, ejecutarGeneracion, programarPrueba, cancelarPrueba, pruebaDe, proximaEjecucion };
+module.exports = { iniciar, revisar, ejecutarGeneracion, programarPrueba, cancelarPrueba, pruebaDe, proximaEjecucion, primeraEjecucion, derivar };

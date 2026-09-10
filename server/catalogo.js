@@ -78,14 +78,65 @@ function aplicarPeriodoAuto(encuesta) {
 
 const PERIODO = mesAnterior();
 
+/* Fechas por defecto de la ventana de disponibilidad */
+const HOY = new Date().toISOString().slice(0, 10);
+const FIN_ANIO = `${new Date().getFullYear()}-12-31`;
+
 /* Las ordenes de muestra se fechan siempre dentro del mes evaluado,
    para que la demo siga teniendo datos sin importar en que mes se abra. */
 function fechaDelPeriodo(dia) {
   return `${String(dia).padStart(2, "0")}/${String(PERIODO.mes).padStart(2, "0")}/${PERIODO.anio}`;
 }
 
+/* Catalogos de apoyo para la ficha del trabajo (los mismos campos
+   que muestra el sistema: productos, fases, fechas y totales). */
+const TECNICOS = [
+  "Fernando Jose Campos Turcios",
+  "Jonathan Josue Yoc Vicente",
+  "Cesar Tzalam",
+  "Josue Daniel Muños Morales",
+  "Maria Rodriguez",
+  "Jennifer Alejandra Guerra Quevedo",
+];
+
+const PRODUCTOS = {
+  "Corona zirconia":        { codigo: "007", ref: "A13007", nombre: "CORONA ZIRCONIA MONOLITICA", etiqueta: "PROTESIS FIJA", precio: 650 },
+  "Puente zirconia":       { codigo: "011", ref: "A13011", nombre: "PUENTE ZIRCONIA (3 UNIDADES)", etiqueta: "PROTESIS FIJA", precio: 1850 },
+  "Corona e.max":          { codigo: "005", ref: "A13005", nombre: "CORONA E.MAX PRENSADA", etiqueta: "PROTESIS FIJA", precio: 720 },
+  "Prótesis fija":         { codigo: "021", ref: "A13021", nombre: "PROTESIS FIJA METAL PORCELANA", etiqueta: "PROTESIS FIJA", precio: 540 },
+  "Carilla feldespática":  { codigo: "032", ref: "A13032", nombre: "CARILLA FELDESPATICA ESTRATIFICADA", etiqueta: "ESTETICA", precio: 780 },
+  "Incrustación":          { codigo: "003", ref: "A13003", nombre: "INCRUSTACION DE RESINA MANUAL (Inlay / Onlay)", etiqueta: "PROTESIS FIJA", precio: 180 },
+  "Prótesis total":        { codigo: "045", ref: "A13045", nombre: "PROTESIS TOTAL ACRILICA", etiqueta: "REMOVIBLE", precio: 1250 },
+};
+
+const FASES = ["INGRESO", "MODELOS ANALOGOS 1", "MODELOS ANALOGOS 2", "MODELOS ANALOGOS 3", "ACABADO", "CIERRE"];
+
+/* Suma o resta dias a una fecha DD/MM/YYYY sin salirse del calendario */
+function correrFecha(fecha, dias) {
+  if (!fecha || !String(fecha).includes("/")) return "—";
+  const [d, m, a] = String(fecha).split("/").map(Number);
+  const base = new Date(a, m - 1, d);
+  base.setDate(base.getDate() + dias);
+  return `${String(base.getDate()).padStart(2, "0")}/${String(base.getMonth() + 1).padStart(2, "0")}/${base.getFullYear()}`;
+}
+
+const quetzales = (n) => `${Number(n).toFixed(2)} Q`;
+
 function trabajo(code, box, clinic, doctor, patient, status, product, advisor, dia) {
   const sent = dia ? fechaDelPeriodo(dia) : "—";
+  const ficha = PRODUCTOS[product] || { codigo: "000", ref: "A00000", nombre: product.toUpperCase(), etiqueta: "GENERAL", precio: 300 };
+  const unidades = product === "Puente zirconia" ? 3 : 1;
+  const total = ficha.precio;
+  const diente = 10 + (Number(String(code).slice(-2)) % 28);
+
+  /* Fechas del ciclo: pedido → aceptación → finalización → envío */
+  const creada = dia ? correrFecha(sent, -3) : "—";
+  const aceptada = dia ? correrFecha(sent, -3) : "—";
+  const finalizada = dia ? correrFecha(sent, -1) : "—";
+  const limite = dia ? correrFecha(sent, 0) : "—";
+
+  const tecnicoIngreso = TECNICOS[Number(String(code).slice(-1)) % TECNICOS.length];
+
   return {
     id: code,
     code,
@@ -98,6 +149,60 @@ function trabajo(code, box, clinic, doctor, patient, status, product, advisor, d
     advisor,
     sent,
     period: dia ? PERIODO.clave : "",
+
+    /* ---- Ficha completa del trabajo ---- */
+    technician: tecnicoIngreso,
+    center: "—",
+    age: "—",
+    sex: Number(String(code).slice(-1)) % 2 ? "Femenino" : "Masculino",
+    createdAt: creada === "—" ? "—" : `${creada} ${8 + (diente % 9)}:35`,
+    acceptedAt: aceptada,
+    finishedAt: finalizada,
+    orderedAt: "—",
+    dueAt: limite === "—" ? "—" : `${limite} 14:00`,
+    estimatedAt: limite === "—" ? "—" : `${limite} 14:00`,
+    albaranAt: dia ? sent : "—",
+    total: quetzales(total),
+    totalIVA: quetzales(total),
+    tags: [ficha.etiqueta],
+    products: [
+      {
+        line: 1,
+        code: ficha.codigo,
+        name: ficha.nombre,
+        ref: `${ficha.ref} - ${product.toUpperCase()}`,
+        units: unidades,
+        teeth: diente,
+        price: quetzales(total),
+        discount: "0.00 %",
+        unitPrice: quetzales(total / unidades),
+        total: quetzales(total),
+        iva: "0.00 Q",
+      },
+    ],
+    phases: FASES.map((nombre, indice) => {
+      const inicio = creada === "—" ? "—" : `${correrFecha(creada, Math.min(indice, 2))} ${(7 + indice)}:0${indice}`;
+      return {
+        line: indice + 1,
+        name: nombre,
+        responsible: TECNICOS[(indice + Number(String(code).slice(-1))) % TECNICOS.length],
+        role: "Technician",
+        state: dia ? "terminada" : indice < 2 ? "terminada" : "pendiente",
+        start: inicio,
+        end: inicio,
+        estimated: limite === "—" ? "—" : `${limite} 14:00`,
+        teeth: 1,
+        cost: indice === 0 ? "0.00 Q" : "1.00 Q",
+        commission: "0.00 Q",
+        time: (indice === 0 ? 0.03 : indice * 4.9 + 0.02).toFixed(2),
+      };
+    }),
+    observations: dia
+      ? "Respetar la guía de color enviada por la clínica. Contacto proximal ajustado en boca."
+      : "Sin indicaciones de la clínica.",
+    internalNotes: dia
+      ? "Trabajo revisado en control de calidad antes del envío."
+      : "Pendiente de revisión en control de calidad.",
   };
 }
 
@@ -293,6 +398,13 @@ function nuevaEncuesta(clasificacion = "Externa", extra = {}) {
       audienceMode: externa ? "Todos los doctores" : "Por área y supervisor",
       audienceAreas: externa ? [] : ["Área de Administración"],
       audienceDoctors: [],
+
+      /* ---- Configuración de encuesta interna (igual que el sistema) ---- */
+      assignMode: "Por supervisor",
+      areaKey: externa ? "" : "ADMINISTRACION",
+      supervisorName: "",
+      respondents: [],
+      suggestions: true,
       anonymous: !externa,
       channel: externa ? "API WhatsApp" : "Enlace directo",
       whatsappMessage: externa
@@ -304,13 +416,20 @@ function nuevaEncuesta(clasificacion = "Externa", extra = {}) {
       periodFrom: PERIODO.desde,
       periodTo: PERIODO.hasta,
       schedule: {
-        active: externa,
-        repeat: externa ? "Mensual" : "No repetir",
+        active: true,
+        repeat: "Mensual",
         generationDay: 8,
-        time: "07:00",
         closeDay: 11,
+        /* Ventana de disponibilidad: aplica a internas y externas */
+        startDate: HOY,
+        startTime: "07:00",
+        endDate: FIN_ANIO,
+        endTime: "23:59",
+        /* Se conserva por compatibilidad con la agenda anterior */
+        time: "07:00",
         lastRun: "",
         nextRun: "",
+        firstRun: "",
       },
       works: {
         enabled: externa,
@@ -324,6 +443,33 @@ function nuevaEncuesta(clasificacion = "Externa", extra = {}) {
     extra
   );
 }
+
+/* Las encuestas internas de demostración traen las mismas preguntas
+   que ya usaba el sistema anterior, para poder ver el flujo completo. */
+function seccionesInternasDemo(preguntas, area) {
+  return [
+    seccion({
+      title: "Evaluación de liderazgo",
+      description: "Sus respuestas son anónimas y se agrupan por área.",
+      next: "submit",
+      questions: preguntas.map((texto) =>
+        pregunta({
+          text: texto,
+          area,
+          type: "stars",
+          lowPrompt: "¿Qué considera que se puede mejorar?",
+          highPrompt: "¿Qué es lo que más valora?",
+          improvementOptions: ["Comunicación", "Seguimiento", "Apoyo", "Orden y limpieza", "Reconocimiento", "Otro"],
+          valueOptions: ["Comunicación", "Acompañamiento", "Claridad", "Trato", "Otro"],
+        })
+      ),
+    }),
+  ];
+}
+
+/* Suba este número cuando cambien los datos de demostración:
+   el sistema los refresca solo, sin borrar lo que el usuario creó. */
+const VERSION_SEMILLA = 4;
 
 function semilla() {
   const externa = nuevaEncuesta("Externa", {
@@ -342,17 +488,47 @@ function semilla() {
     "RRHH",
   ];
 
-  const internas = areas.map((area, index) =>
-    nuevaEncuesta("Interna", {
+  const personal = require("./personal");
+
+  /* Cada encuesta del catálogo apunta a un área real del organigrama */
+  const AREA_REAL = {
+    "Área de Administración": "ADMINISTRACION",
+    "Área de Control de Producción/PPR": "CONTROL DE PRODUCCION",
+    "Área de Estructuras 1": "ESTRUCTURAS 1",
+    "Área de Estructuras 2": "ESTRUCTURAS 2",
+    "Área de Mensajería": "MENSAJERIA",
+    "Área de Servicio al Cliente": "SERVICIO AL CLIENTE",
+    RRHH: "GERENCIA GENERAL",
+  };
+
+  const internas = areas.map((area, index) => {
+    const esRRHH = area === "RRHH";
+    const preguntas = esRRHH ? personal.PREGUNTAS_RRHH : personal.PREGUNTAS_LIDERAZGO;
+    return nuevaEncuesta("Interna", {
       id: `int-liderazgo-${index}`,
-      name: `Evaluación de Liderazgo: Tu Opinión Cuenta - ${area}`,
-      subtype: index === 6 ? "Clima laboral" : "Liderazgo",
+      name: `"Evaluación ${esRRHH ? "RRHH" : "de Liderazgo"}: Tu Opinión Cuenta"${esRRHH ? "" : ` - ${area}`}`,
+      subtype: esRRHH ? "Clima laboral" : "Liderazgo",
       status: "Activa",
       audienceAreas: [area],
-    })
-  );
+      areaKey: AREA_REAL[area] || "GERENCIA GENERAL",
+      assignMode: "Por supervisor",
+      supervisorName: personal.supervisorDe([area]),
+      respondents: personal.respondedores(AREA_REAL[area] || "GERENCIA GENERAL").gente.map((g) => g.id),
+      suggestions: true,
+      respondent: esRRHH ? "Todo el personal" : `Colaboradores de ${area}`,
+      description: esRRHH
+        ? "Encuesta de clima laboral para todo el personal de Digital Labs. Sus respuestas son anónimas."
+        : `Evaluación del liderazgo en ${area}. Sus respuestas son anónimas y se agrupan por área.`,
+      schedule: {
+        active: true, repeat: "Mensual", generationDay: 1, closeDay: 10,
+        startDate: HOY, startTime: "08:00", endDate: FIN_ANIO, endTime: "23:59",
+        time: "08:00", lastRun: "", nextRun: "", firstRun: "",
+      },
+      sections: seccionesInternasDemo(preguntas, esRRHH ? "Recursos Humanos" : "Gerencia"),
+    });
+  });
 
-  return [externa, ...internas];
+  return [externa, ...internas].map((encuesta) => Object.assign(encuesta, { seedVersion: VERSION_SEMILLA }));
 }
 
 /* Trabajos elegibles agrupados por doctor (RF-ENC-001).
@@ -374,4 +550,4 @@ function agruparPorDoctor(estados, rango = {}, filtro = {}) {
   return [...mapa.values()];
 }
 
-module.exports = { AREAS, TRABAJOS, PERIODO, uid, pregunta, seccion, nuevaEncuesta, semilla, agruparPorDoctor, mesAnterior, aplicarPeriodoAuto, aISO, bonita, enRango };
+module.exports = { AREAS, TRABAJOS, PERIODO, VERSION_SEMILLA, uid, pregunta, seccion, nuevaEncuesta, semilla, agruparPorDoctor, mesAnterior, aplicarPeriodoAuto, aISO, bonita, enRango };

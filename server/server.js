@@ -12,6 +12,7 @@ const url = require("url");
 
 const config = require("./config");
 const catalogo = require("./catalogo");
+const personal = require("./personal");
 const db = require("./db");
 const whatsapp = require("./whatsapp");
 const operaciones = require("./operaciones");
@@ -113,6 +114,124 @@ async function api(req, res, ruta, consulta) {
     });
   }
 
+  /* ---- personal del laboratorio ---- */
+  if (partes[1] === "empleados" && !partes[2] && req.method === "GET") {
+    const gente = personal.listar().map((persona) => {
+      const suyas = db.instancias.listar().filter((i) => i.employeeId === persona.id);
+      return Object.assign({}, persona, {
+        _asignadas: suyas.length,
+        _respondidas: suyas.filter((i) => i.answers && i.answers.length).length,
+      });
+    });
+    return json(res, gente);
+  }
+
+  if (partes[1] === "empleados" && partes[2] && req.method === "GET") {
+    const persona = personal.obtener(decodeURIComponent(partes[2]));
+    if (!persona) return json(res, { error: "colaborador no encontrado" }, 404);
+
+    /* Sus encuestas internas, para el apartado de encuestas de la ficha */
+    const suyas = db.instancias
+      .listar()
+      .filter((i) => i.employeeId === persona.id)
+      .map((instancia) => {
+        const encuesta = db.encuestas.obtener(instancia.surveyId);
+        const notas = (instancia.answers || []).filter((r) => r.calificacion).map((r) => r.calificacion);
+        return {
+          instanceId: instancia.id,
+          surveyName: encuesta ? encuesta.name : "Encuesta eliminada",
+          period: instancia.periodLabel,
+          supervisor: instancia.supervisor || "",
+          state: instancia.state,
+          respondida: notas.length > 0,
+          promedio: notas.length ? (notas.reduce((a, b) => a + b, 0) / notas.length).toFixed(2) : "—",
+          finishedAt: instancia.finishedAt,
+        };
+      });
+
+    return json(res, Object.assign({}, persona, { _encuestas: suyas }));
+  }
+
+  /* Quiénes responderían una encuesta interna con esa área y modo */
+  if (partes[1] === "respondedores" && req.method === "GET") {
+    const area = ((consulta || {}).area || "GERENCIA GENERAL").toString();
+    const modo = ((consulta || {}).modo || "Por supervisor").toString();
+    return json(res, personal.respondedores(area, modo));
+  }
+
+  if (partes[1] === "catalogos" && req.method === "GET") {
+    return json(res, {
+      areas: personal.AREAS_LAB,
+      arbol: personal.areasJerarquia(),
+      departamentos: personal.DEPARTAMENTOS,
+      municipios: personal.MUNICIPIOS_POR_DEPTO,
+      fases: personal.FASES_LAB,
+      puestos: [...new Set(personal.listar().map((p) => p.position))].sort(),
+    });
+  }
+
+  /* ---- resultados de encuestas internas: histórico + motor nuevo ---- */
+  if (partes[1] === "resultados" && !partes[2] && req.method === "GET") {
+    return json(res, operaciones.resultados().map((r) => Object.assign({}, r, { preguntas: undefined, colaboradores: undefined, comentarios: undefined })));
+  }
+
+  if (partes[1] === "resultados" && partes[2] && req.method === "GET") {
+    const resultado = operaciones.resultadoDe(decodeURIComponent(partes[2]));
+    if (!resultado) return json(res, { error: "resultado no encontrado" }, 404);
+    return json(res, resultado);
+  }
+
+  /* ---- portal del colaborador ---- */
+  if (partes[1] === "portal" && partes[2] === "login" && req.method === "POST") {
+    const persona = personal.porCorreo(cuerpo.correo);
+    if (!persona) return json(res, { error: "No encontramos ese correo en el personal del laboratorio." }, 404);
+    return json(res, persona);
+  }
+
+  if (partes[1] === "portal" && partes[2] === "personal" && req.method === "GET") {
+    return json(res, personal.listar().map((p) => ({
+      id: p.id, name: p.name, email: p.email, area: p.area,
+      position: p.position, supervisor: p.supervisor, role: p.role,
+    })));
+  }
+
+  if (partes[1] === "portal" && partes[2] && partes[3] === "bandeja" && req.method === "GET") {
+    const persona = personal.obtener(decodeURIComponent(partes[2]));
+    if (!persona) return json(res, { error: "colaborador no encontrado" }, 404);
+
+    const bandeja = db.instancias
+      .listar()
+      .filter((i) => i.employeeId === persona.id)
+      .map((instancia) => {
+        const encuesta = db.encuestas.obtener(instancia.surveyId);
+        return {
+          instanceId: instancia.id,
+          surveyId: instancia.surveyId,
+          surveyName: encuesta ? encuesta.name : "Encuesta eliminada",
+          subtype: encuesta ? encuesta.subtype : "",
+          description: encuesta ? encuesta.description : "",
+          period: instancia.periodLabel,
+          supervisor: instancia.supervisor || "",
+          state: instancia.state,
+          respondida: Boolean(instancia.answers && instancia.answers.length),
+          finishedAt: instancia.finishedAt,
+          preguntas: encuesta ? (encuesta.sections || []).reduce((t, sec) => t + (sec.questions || []).length, 0) : 0,
+        };
+      })
+      .sort((a, b) => Number(a.respondida) - Number(b.respondida));
+
+    /* Si es supervisor, también ve el resultado de su equipo */
+    const mios = persona.supervisor
+      ? operaciones.resultados().filter((r) => r.supervisor === persona.name)
+      : [];
+
+    return json(res, { empleado: persona, bandeja, resultados: mios });
+  }
+
+  if (partes[1] === "trabajos" && partes[2] && partes[3] === "encuesta" && req.method === "GET") {
+    return json(res, operaciones.encuestasDeTrabajo(decodeURIComponent(partes[2])));
+  }
+
   if (partes[1] === "trabajos" && req.method === "GET") {
     return json(res, catalogo.TRABAJOS);
   }
@@ -143,6 +262,26 @@ async function api(req, res, ruta, consulta) {
     }
   }
 
+  /* Día de generación y día de cierre salen de la ventana */
+  function sincronizarAgenda(encuesta) {
+    const d = agenda.derivar(encuesta);
+    encuesta.schedule.generationDay = d.dia;
+    encuesta.schedule.time = d.desde;
+    encuesta.schedule.closeDay = d.fin ? d.fin.getDate() : encuesta.schedule.closeDay;
+    encuesta.schedule.active = d.repite;
+    encuesta.schedule.nextRun = agenda.proximaEjecucion(encuesta);
+    encuesta.schedule.firstRun = agenda.primeraEjecucion(encuesta);
+    return encuesta;
+  }
+
+  /* ---- plantilla: encuesta nueva en blanco que NO se guarda ---- */
+  if (partes[1] === "plantilla" && req.method === "POST") {
+    const encuesta = catalogo.nuevaEncuesta(cuerpo.classification === "Interna" ? "Interna" : "Externa");
+    catalogo.aplicarPeriodoAuto(encuesta);
+    sincronizarAgenda(encuesta);
+    return json(res, encuesta);
+  }
+
   /* ---- encuestas ---- */
   if (partes[1] === "encuestas") {
     const id = partes[2];
@@ -150,7 +289,12 @@ async function api(req, res, ruta, consulta) {
     if (!id && req.method === "GET") {
       const lista = db.encuestas.listar().map((encuesta) =>
         Object.assign({}, encuesta, {
+          schedule: Object.assign({}, encuesta.schedule, {
+            firstRun: agenda.primeraEjecucion(encuesta),
+            nextRun: agenda.proximaEjecucion(encuesta),
+          }),
           _instancias: db.instancias.listar(encuesta.id).length,
+          _respondidas: db.instancias.listar(encuesta.id).filter((i) => i.answers && i.answers.length).length,
           _proxima: agenda.proximaEjecucion(encuesta),
           _prueba: agenda.pruebaDe(encuesta.id),
         })
@@ -159,9 +303,13 @@ async function api(req, res, ruta, consulta) {
     }
 
     if (!id && req.method === "POST") {
-      const encuesta = catalogo.nuevaEncuesta(cuerpo.classification === "Interna" ? "Interna" : "Externa");
+      const completa = cuerpo && Array.isArray(cuerpo.sections);
+      const encuesta = completa
+        ? Object.assign(catalogo.nuevaEncuesta(cuerpo.classification === "Interna" ? "Interna" : "Externa"), cuerpo)
+        : catalogo.nuevaEncuesta(cuerpo.classification === "Interna" ? "Interna" : "Externa");
+      if (!encuesta.id || db.encuestas.obtener(encuesta.id)) encuesta.id = catalogo.uid("enc");
       catalogo.aplicarPeriodoAuto(encuesta);
-      encuesta.schedule.nextRun = agenda.proximaEjecucion(encuesta);
+      sincronizarAgenda(encuesta);
       db.encuestas.crear(encuesta);
       return json(res, encuesta, 201);
     }
@@ -170,11 +318,18 @@ async function api(req, res, ruta, consulta) {
     if (!encuesta) return json(res, { error: "encuesta no encontrada" }, 404);
 
     if (!partes[3]) {
-      if (req.method === "GET") return json(res, encuesta);
+      if (req.method === "GET") {
+        return json(res, Object.assign({}, encuesta, {
+          schedule: Object.assign({}, encuesta.schedule, {
+            firstRun: agenda.primeraEjecucion(encuesta),
+            nextRun: agenda.proximaEjecucion(encuesta),
+          }),
+        }));
+      }
       if (req.method === "PUT") {
         const actualizada = Object.assign({}, encuesta, cuerpo, { id: encuesta.id });
         catalogo.aplicarPeriodoAuto(actualizada);
-        actualizada.schedule.nextRun = agenda.proximaEjecucion(actualizada);
+        sincronizarAgenda(actualizada);
         db.encuestas.guardar(actualizada);
         return json(res, actualizada);
       }

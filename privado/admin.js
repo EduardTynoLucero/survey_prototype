@@ -45,6 +45,23 @@
     selectedWorkId: "15281",
     openDoctor: "",
     openMenu: "",
+    filtros: null,
+    filtrosOpen: false,
+    filtrosTrabajos: null,
+    workSurveys: null,
+    answersSurveyId: "",
+    empleados: [],
+    filtrosEmp: null,
+    filtrosEmpOpen: false,
+    resultados: [],
+    resultado: null,
+    empleado: null,
+    empTab: "personales",
+    alcanceInterno: null,
+    empleadosLista: [],
+    filtrosTrabajosOpen: false,
+    original: null,
+    esNueva: false,
     previewDoctor: "",
     previewOpen: false,
     focusAfterRender: "",
@@ -55,7 +72,12 @@
 
   const els = {};
 
+  /* Solo entra quien tenga acceso de administración al módulo */
+  const sesion = window.DL_SESION ? DL_SESION.exigir(["admin"], "../") : null;
+
   document.addEventListener("DOMContentLoaded", async () => {
+    if (!sesion) return;
+    pintarUsuario(sesion);
     ["moduleNav", "sidebar", "appView", "previewDrawer", "previewBackdrop", "closePreview", "previewTitle", "previewContent", "toast"].forEach(
       (id) => (els[id] = document.getElementById(id))
     );
@@ -100,6 +122,116 @@
   }
 
   /* ==================================================================
+     Filtros de los listados (se recuerdan igual que en el sistema)
+     ================================================================== */
+  const FILTROS_ENC = { texto: "", clasificacion: "", estado: "", subcategoria: "", repeticion: "", responde: "", inactivas: true };
+  const FILTROS_EMP = { texto: "", area: "", puesto: "", inactivos: false };
+  const FILTROS_TRA = { texto: "", clinica: "", doctor: "", caja: "", estado: "", producto: "", asesora: "", desde: "", hasta: "" };
+  const LS = { enc: "dl_filtros_encuestas", tra: "dl_filtros_trabajos", emp: "dl_filtros_empleados" };
+
+  function leerFiltros(clave, base) {
+    try {
+      const guardado = JSON.parse(localStorage.getItem(clave) || "null");
+      return Object.assign({}, base, guardado || {});
+    } catch (error) {
+      return Object.assign({}, base);
+    }
+  }
+
+  function escribirFiltros(clave, valores) {
+    try {
+      localStorage.setItem(clave, JSON.stringify(valores));
+    } catch (error) {
+      /* si el navegador no deja guardar, los filtros siguen funcionando en pantalla */
+    }
+  }
+
+  const filtrosEnc = () => (state.filtros = state.filtros || leerFiltros(LS.enc, FILTROS_ENC));
+  const filtrosTra = () => (state.filtrosTrabajos = state.filtrosTrabajos || leerFiltros(LS.tra, FILTROS_TRA));
+  const filtrosEmp = () => (state.filtrosEmp = state.filtrosEmp || leerFiltros(LS.emp, FILTROS_EMP));
+
+  /* Colaboradores que pasan los filtros activos */
+  function empleadosFiltrados() {
+    const f = filtrosEmp();
+    const texto = f.texto.trim().toLowerCase();
+    return state.empleados.filter((persona) => {
+      if (!f.inactivos && !persona.active) return false;
+      if (f.area && persona.area !== f.area) return false;
+      if (f.puesto && persona.position !== f.puesto) return false;
+      if (texto && !contiene(persona.name, texto) && !contiene(persona.email, texto) && !contiene(persona.position, texto)) return false;
+      return true;
+    });
+  }
+
+  const cuentaFiltros = (valores, base) =>
+    Object.keys(base).filter((campo) => String(valores[campo] ?? "") !== String(base[campo])).length;
+
+  const contiene = (valor, texto) => String(valor || "").toLowerCase().includes(texto);
+
+  /* Encuestas que pasan los filtros activos */
+  function encuestasFiltradas() {
+    const f = filtrosEnc();
+    const texto = f.texto.trim().toLowerCase();
+    return state.surveys.filter((survey) => {
+      if (state.listFilter !== "all") {
+        const quiere = state.listFilter === "ext" ? "Externa" : "Interna";
+        if (survey.classification !== quiere) return false;
+      }
+      if (!f.inactivas && survey.status === "Inactiva") return false;
+      if (f.clasificacion && survey.classification !== f.clasificacion) return false;
+      if (f.estado && survey.status !== f.estado) return false;
+      if (f.subcategoria && survey.subtype !== f.subcategoria) return false;
+      if (f.repeticion && survey.schedule.repeat !== f.repeticion) return false;
+      if (f.responde && survey.respondent !== f.responde) return false;
+      if (texto && !contiene(survey.name, texto) && !contiene(survey.subtype, texto) && !contiene(survey.respondent, texto)) return false;
+      return true;
+    });
+  }
+
+  /* Trabajos que pasan los filtros activos */
+  function trabajosFiltrados() {
+    const f = filtrosTra();
+    const texto = f.texto.trim().toLowerCase();
+    return DL.WORKS.filter((work) => {
+      if (f.clinica && work.clinic !== f.clinica) return false;
+      if (f.doctor && work.doctor !== f.doctor) return false;
+      if (f.caja && String(work.box) !== f.caja) return false;
+      if (f.estado && work.status !== f.estado) return false;
+      if (f.producto && work.product !== f.producto) return false;
+      if (f.asesora && work.advisor !== f.asesora) return false;
+      if ((f.desde || f.hasta) && !DL.enRango(work, f.desde, f.hasta)) return false;
+      if (texto && !contiene(work.code, texto) && !contiene(work.patient, texto) && !contiene(work.doctor, texto) && !contiene(work.clinic, texto)) return false;
+      return true;
+    });
+  }
+
+  const unicos = (lista, campo) => [...new Set(lista.map((item) => item[campo]).filter(Boolean))].sort((a, b) => String(a).localeCompare(String(b), "es"));
+
+  /* Barra "Ver filtros / Borrar filtros" con el contador, igual que en el sistema */
+  function barraFiltros(abierto, cuenta, extra = "") {
+    return `
+      <div class="dl-toolbar">
+        <button class="dl-filter-toggle ${abierto ? "is-open" : ""}" type="button" data-act="toggle-filtros">
+          <span class="dl-ico">⚙</span>${abierto ? "Ocultar filtros" : "Ver filtros"}
+          ${cuenta ? `<span class="dl-filter-count">${cuenta}</span>` : ""}
+          <span class="dl-chevron">⌄</span>
+        </button>
+        <button class="dl-filter-clear" type="button" data-act="limpiar-filtros" ${cuenta ? "" : "disabled"}>✕ Borrar filtros</button>
+        ${extra}
+      </div>`;
+  }
+
+  function campoFiltro(etiqueta, campo, opciones, valor, ancho = "") {
+    return `
+      <label class="dl-field ${ancho}"><span>${etiqueta}</span>
+        <select data-filtro="${campo}">
+          <option value="">- Cualquiera -</option>
+          ${opciones.map((opcion) => `<option ${opcion === valor ? "selected" : ""}>${esc(opcion)}</option>`).join("")}
+        </select>
+      </label>`;
+  }
+
+  /* ==================================================================
      Helpers
      ================================================================== */
   const draft = () => state.draft;
@@ -127,6 +259,61 @@
     return `${dia}/${mes}/${anio}`;
   };
 
+  /* Primera y próxima corrida, calculadas en pantalla para que se
+     actualicen al cambiar la fecha o la hora (el servidor manda igual). */
+  const MESES_LARGO = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
+  const SALTO_MESES = { Mensual: 1, Trimestral: 3, Anual: 12 };
+
+  const aFecha = (iso) => {
+    if (!iso || !String(iso).includes("-")) return null;
+    const [anio, mes, dia] = String(iso).split("-").map(Number);
+    return new Date(anio, mes - 1, dia);
+  };
+
+  const ventanaTexto = (fecha, desde, hasta) =>
+    fecha ? `${fecha.getDate()} ${MESES_LARGO[fecha.getMonth()]} ${fecha.getFullYear()} de ${desde} A ${hasta}` : "—";
+
+  const diaDeInicio = (survey) => {
+    const inicio = aFecha((survey.schedule || {}).startDate);
+    return inicio ? inicio.getDate() : new Date().getDate();
+  };
+
+  const horaDeInicio = (survey) => String((survey.schedule || {}).startTime || "07:00").slice(0, 5);
+
+  function corridas(survey) {
+    const prog = survey.schedule || {};
+    const desde = String(prog.startTime || "07:00").slice(0, 5);
+    const hasta = String(prog.endTime || "23:59").slice(0, 5);
+    const inicio = aFecha(prog.startDate);
+    const fin = aFecha(prog.endDate);
+    const ahora = new Date();
+
+    /* Sin repetición corre una sola vez: en la fecha y hora de inicio */
+    if (prog.repeat === "No repetir") {
+      const unica = ventanaTexto(inicio, desde, hasta);
+      return { primera: unica, proxima: prog.lastRun ? "No se repite" : unica };
+    }
+
+    const salto = SALTO_MESES[prog.repeat] || 1;
+    const base = inicio || ahora;
+    const dia = base.getDate();
+
+    let primera = new Date(base.getFullYear(), base.getMonth(), dia);
+    if (primera < base) primera = new Date(base.getFullYear(), base.getMonth() + 1, dia);
+
+    const [hh, mm] = desde.split(":").map(Number);
+    let proxima = new Date(ahora.getFullYear(), ahora.getMonth(), dia, hh || 0, mm || 0);
+    while (proxima <= ahora) proxima = new Date(proxima.getFullYear(), proxima.getMonth() + salto, dia, hh || 0, mm || 0);
+    if (proxima < primera) proxima = new Date(primera);
+
+    const pasoElFin = fin && proxima > new Date(fin.getFullYear(), fin.getMonth(), fin.getDate(), 23, 59);
+
+    return {
+      primera: ventanaTexto(primera, desde, hasta),
+      proxima: pasoElFin ? "Terminó la disponibilidad" : ventanaTexto(proxima, desde, hasta),
+    };
+  }
+
   /* Etiqueta del período, calculada al vuelo para que se vea al instante */
   const etiquetaPeriodo = () => {
     const survey = draft();
@@ -137,16 +324,72 @@
   };
   const selectedWork = () => DL.WORKS.find((work) => work.id === state.selectedWorkId) || DL.WORKS[0];
 
-  function abrirBorrador(survey) {
+  /* Recalcula quiénes responderían la encuesta interna y congela la
+     lista dentro de la encuesta, igual que hace el sistema al guardar. */
+  async function recalcularAlcance({ conservarQuitados = true } = {}) {
+    const survey = state.draft;
+    if (!survey || survey.classification !== "Interna") return;
+
+    if (!DL.AREAS_ARBOL) {
+      try {
+        const catalogos = await DL.api.catalogos();
+        DL.AREAS_ARBOL = catalogos.arbol;
+        DL.AREAS_LAB = catalogos.areas;
+        DL.DEPARTAMENTOS = catalogos.departamentos;
+        DL.MUNICIPIOS = catalogos.municipios;
+        DL.FASES_LAB = catalogos.fases;
+      } catch (error) {
+        DL.AREAS_ARBOL = [];
+      }
+    }
+
+    if (survey.assignMode === "Manual") {
+      if (!state.empleadosLista.length) {
+        try {
+          state.empleadosLista = (await DL.api.empleados()).filter((e) => e.active && !e.supervisor);
+        } catch (error) {
+          state.empleadosLista = [];
+        }
+      }
+      state.alcanceInterno = { supervisor: survey.supervisorName || "", gente: [], avisos: [], subareas: [] };
+      renderView();
+      return;
+    }
+
+    try {
+      const alcance = await DL.api.respondedores(survey.areaKey || "GERENCIA GENERAL", survey.assignMode);
+      state.alcanceInterno = alcance;
+      survey.supervisorName = alcance.supervisor;
+      const quitados = conservarQuitados ? survey.excluded || [] : [];
+      survey.excluded = quitados;
+      survey.respondents = alcance.gente.map((g) => g.id).filter((id) => !quitados.includes(id));
+      guardar();
+    } catch (error) {
+      state.alcanceInterno = { supervisor: "", gente: [], avisos: [error.message], subareas: [] };
+    }
+    renderView();
+  }
+
+  function abrirBorrador(survey, esNueva = false) {
     state.draft = DL.clone(survey);
+    state.original = DL.clone(survey);
+    state.esNueva = esNueva;
     state.activeSectionId = state.draft.sections[0].id;
     state.activeQuestionId = state.draft.sections[0].questions[0].id;
     state.openQuestionId = state.activeQuestionId;
+    state.alcanceInterno = null;
+    if (state.draft.classification === "Interna") recalcularAlcance();
   }
 
   function guardar(mensaje) {
     if (!state.draft) return;
     const badge = document.getElementById("saveState");
+    /* Una encuesta que todavía no se ha creado vive solo en pantalla:
+       nada se guarda hasta que se pulsa "Crear encuesta" o "Guardar como borrador". */
+    if (state.esNueva) {
+      if (badge) badge.textContent = "Sin guardar · use los botones de abajo";
+      return;
+    }
     if (badge) badge.textContent = "Guardando cambios…";
     clearTimeout(state.saveTimer);
     state.saveTimer = setTimeout(async () => {
@@ -165,6 +408,17 @@
         showToast("No se pudo guardar: " + error.message);
       }
     }, 350);
+  }
+
+  /* Guarda de verdad: crea la encuesta la primera vez, actualiza despues */
+  async function persistir(survey) {
+    const guardada = state.esNueva
+      ? await DL.api.crearDesdeBorrador(survey)
+      : await DL.api.guardarEncuesta(survey);
+    state.draft = DL.clone(guardada);
+    state.original = DL.clone(guardada);
+    state.esNueva = false;
+    return guardada;
   }
 
   function checklist() {
@@ -200,7 +454,7 @@
     }
     if (state.openMenu && !event.target.closest(".menu-pop")) {
       state.openMenu = "";
-      if (!event.target.closest("[data-act],[data-view],[data-step],[data-module]")) {
+      if (!event.target.closest("[data-act],[data-view],[data-step],[data-module],[data-row-open]")) {
         renderView();
         return;
       }
@@ -209,8 +463,8 @@
     const moduleTab = event.target.closest("[data-module]");
     if (moduleTab) {
       state.module = moduleTab.dataset.module;
-      state.view = state.module === "works" ? "work-list" : state.module === "reports" ? "results" : "survey-list";
-      renderApp();
+      const inicio = { works: "work-list", lab: "employees", reports: "results-list" };
+      irA(inicio[state.module] || "survey-list");
       return;
     }
     const viewLink = event.target.closest("[data-view]");
@@ -229,6 +483,14 @@
       runAction(action.dataset.act, action.dataset.arg, action);
       return;
     }
+
+    /* Al hacer clic en cualquier parte de la fila se abre el registro,
+       salvo si el clic fue en la columna de opciones. */
+    const fila = event.target.closest("[data-row-open]");
+    if (fila && !event.target.closest(".menu-wrap, .dl-col-opts, input, select, textarea, button, a")) {
+      runAction(fila.dataset.rowOpen, fila.dataset.rowArg, fila);
+      return;
+    }
     const questionCard = event.target.closest("[data-question-id]");
     if (questionCard && !event.target.closest("input, textarea, select, button")) {
       state.activeSectionId = questionCard.dataset.sectionId;
@@ -239,15 +501,32 @@
   }
 
   async function irA(view) {
+    if (view !== "answers") state.answersSurveyId = "";
     state.view = view;
-    state.module = view.startsWith("work") ? "works" : "surveys";
+    state.module = view.startsWith("work")
+      ? "works"
+      : ["employees", "whatsapp"].includes(view)
+        ? "lab"
+        : "surveys";
     detenerPoll();
     try {
       if (view === "survey-list") state.surveys = await DL.api.encuestas();
       if (view === "sends" && state.draft) state.instancias = await DL.api.instancias(state.draft.id);
-      if (view === "answers") state.respuestas = await DL.api.respuestas();
+      if (view === "answers") state.respuestas = await DL.api.respuestas(state.answersSurveyId || undefined);
       if (view === "results") state.respuestas = await DL.api.respuestas();
       if (view === "whatsapp") state.mensajes = await DL.api.mensajes();
+      if (view === "employees") {
+        state.empleados = await DL.api.empleados();
+        if (!DL.AREAS_LAB) {
+          const catalogos = await DL.api.catalogos();
+          DL.AREAS_ARBOL = catalogos.arbol;
+          DL.AREAS_LAB = catalogos.areas;
+          DL.DEPARTAMENTOS = catalogos.departamentos;
+          DL.MUNICIPIOS = catalogos.municipios;
+          DL.FASES_LAB = catalogos.fases;
+        }
+      }
+      if (view === "results-list") state.resultados = await DL.api.resultados();
     } catch (error) {
       showToast(error.message);
     }
@@ -260,7 +539,7 @@
     state.poll = setInterval(async () => {
       try {
         if (view === "sends" && state.draft) state.instancias = await DL.api.instancias(state.draft.id);
-        if (view === "answers") state.respuestas = await DL.api.respuestas();
+        if (view === "answers") state.respuestas = await DL.api.respuestas(state.answersSurveyId || undefined);
         if (view === "whatsapp") state.mensajes = await DL.api.mensajes();
         renderView();
       } catch (error) {
@@ -269,25 +548,119 @@
     }, 4000);
   }
 
+  /* Repinta el listado y devuelve el cursor al buscador, para poder
+     seguir escribiendo mientras la tabla se filtra sola. */
+  function refrescarListado(idBuscador) {
+    const activo = document.activeElement;
+    const enBuscador = activo && activo.id === idBuscador;
+    const cursor = enBuscador ? activo.selectionStart : 0;
+    renderView();
+    if (!enBuscador) return;
+    const nuevo = document.getElementById(idBuscador);
+    if (!nuevo) return;
+    nuevo.focus();
+    try {
+      nuevo.setSelectionRange(cursor, cursor);
+    } catch (error) {
+      /* algunos tipos de input no permiten mover el cursor */
+    }
+  }
+
   function detenerPoll() {
     if (state.poll) clearInterval(state.poll);
     state.poll = null;
   }
 
+  /* Acciones que necesitan la encuesta ya creada en el servidor */
+  const REQUIERE_GUARDADA = ["sends", "ejecutar-ahora", "probar-agenda", "generar", "enviar", "cerrar", "public-link", "mensaje-instancia"];
+
   async function runAction(act, arg, node) {
     const survey = state.draft;
     state.openMenu = "";
 
+    if (state.esNueva && !arg && REQUIERE_GUARDADA.includes(act)) {
+      showToast("Primero cree la encuesta o guárdela como borrador.");
+      renderView();
+      return;
+    }
+
     try {
       switch (act) {
         case "create": {
-          const creada = await DL.api.crearEncuesta(arg);
-          state.surveys = await DL.api.encuestas();
-          abrirBorrador(creada);
+          const plantilla = await DL.api.plantilla(arg);
+          abrirBorrador(plantilla, true);
           state.view = "survey-edit";
           state.step = "general";
           renderApp();
-          showToast(`Encuesta ${arg.toLowerCase()} creada. Complete los pasos y publíquela.`);
+          showToast(`Encuesta ${arg.toLowerCase()} en blanco. Todavía no se guarda: use los botones de abajo.`);
+          return;
+        }
+
+        /* ---------- Opciones de guardado del asistente ---------- */
+        case "guardar-borrador": {
+          if (!survey) return;
+          clearTimeout(state.saveTimer);
+          survey.status = "Borrador";
+          survey.schedule.active = false;
+          await persistir(survey);
+          state.draft = null;
+          await irA("survey-list");
+          showToast("Guardada como borrador. Puede seguir editándola después.");
+          return;
+        }
+
+        case "crear-encuesta":
+        case "crear-y-enviar": {
+          if (!survey) return;
+          const faltan = checklist().filter((item) => !item[1]).map((item) => item[0]);
+          if (faltan.length) {
+            state.step = "review";
+            renderApp();
+            showToast("Falta completar: " + faltan.join(" · "));
+            return;
+          }
+          clearTimeout(state.saveTimer);
+          survey.status = "Activa";
+          survey.schedule.active = survey.schedule.repeat !== "No repetir";
+          const guardada = await persistir(survey);
+
+          if (act === "crear-y-enviar") {
+            const salida = await DL.api.ejecutar(guardada.id);
+            state.instancias = await DL.api.instancias(guardada.id);
+            state.surveys = await DL.api.encuestas();
+            state.view = "sends";
+            state.module = "surveys";
+            renderApp();
+            iniciarPoll("sends");
+            showToast(`Encuesta creada y enviada: ${salida.instancias} encuesta(s), ${salida.envios.length} envío(s).`);
+            return;
+          }
+
+          state.draft = null;
+          await irA("survey-list");
+          showToast("Encuesta creada y activada.");
+          return;
+        }
+
+        case "cancelar": {
+          if (!survey) return;
+          const nueva = state.esNueva;
+          const aviso = nueva
+            ? "¿Descartar esta encuesta? No se guardó nada."
+            : "¿Descartar los cambios y volver al listado?";
+          if (!window.confirm(aviso)) return;
+          clearTimeout(state.saveTimer);
+          try {
+            /* Si nunca se guardó no hay nada que borrar; si ya existía, se repone como estaba */
+            if (!nueva && state.original) await DL.api.guardarEncuesta(state.original);
+          } catch (error) {
+            showToast("No se pudo deshacer: " + error.message);
+          }
+          state.draft = null;
+          state.original = null;
+          state.esNueva = false;
+          await irA("survey-list");
+          showToast(nueva ? "Encuesta descartada." : "Cambios descartados.");
           return;
         }
 
@@ -348,6 +721,131 @@
         case "filter":
           state.listFilter = arg;
           renderView();
+          return;
+
+        /* ---------- Filtros de los listados ---------- */
+        case "toggle-filtros":
+          state.filtrosOpen = !state.filtrosOpen;
+          renderView();
+          return;
+
+        case "limpiar-filtros":
+          state.filtros = Object.assign({}, FILTROS_ENC);
+          escribirFiltros(LS.enc, state.filtros);
+          renderView();
+          return;
+
+        case "limpiar-texto":
+          filtrosEnc().texto = "";
+          escribirFiltros(LS.enc, state.filtros);
+          renderView();
+          return;
+
+        case "toggle-filtros-trabajo":
+          state.filtrosTrabajosOpen = !state.filtrosTrabajosOpen;
+          renderView();
+          return;
+
+        case "limpiar-filtros-trabajo":
+          state.filtrosTrabajos = Object.assign({}, FILTROS_TRA);
+          escribirFiltros(LS.tra, state.filtrosTrabajos);
+          renderView();
+          return;
+
+        case "limpiar-texto-trabajo":
+          filtrosTra().texto = "";
+          escribirFiltros(LS.tra, state.filtrosTrabajos);
+          renderView();
+          return;
+
+        case "filtro-periodo": {
+          const f = filtrosTra();
+          const puesto = f.desde === DL.PERIODO_DESDE && f.hasta === DL.PERIODO_HASTA;
+          f.desde = puesto ? "" : DL.PERIODO_DESDE;
+          f.hasta = puesto ? "" : DL.PERIODO_HASTA;
+          escribirFiltros(LS.tra, f);
+          renderView();
+          return;
+        }
+
+        case "answers-survey": {
+          state.answersSurveyId = arg;
+          abrirBorrador(await DL.api.encuesta(arg));
+          state.respuestas = await DL.api.respuestas(arg);
+          state.view = "answers";
+          state.module = "surveys";
+          renderApp();
+          iniciarPoll("answers");
+          return;
+        }
+
+        case "toggle-filtros-emp":
+          state.filtrosEmpOpen = !state.filtrosEmpOpen;
+          renderView();
+          return;
+
+        case "limpiar-filtros-emp":
+          state.filtrosEmp = Object.assign({}, FILTROS_EMP);
+          escribirFiltros(LS.emp, state.filtrosEmp);
+          renderView();
+          return;
+
+        case "limpiar-texto-emp":
+          filtrosEmp().texto = "";
+          escribirFiltros(LS.emp, state.filtrosEmp);
+          renderView();
+          return;
+
+        case "employee-detail": {
+          state.empleado = null;
+          state.empTab = "personales";
+          state.view = "employee-detail";
+          state.module = "lab";
+          renderApp();
+          state.empleado = await DL.api.empleado(arg);
+          renderView();
+          return;
+        }
+
+        case "emp-editar":
+          showToast("La ficha se muestra en modo consulta: el mantenimiento del empleado vive en el módulo de Laboratorio del sistema.");
+          return;
+
+        case "quitar-resp": {
+          if (!survey) return;
+          survey.excluded = [...new Set([...(survey.excluded || []), arg])];
+          survey.respondents = (survey.respondents || []).filter((id) => id !== arg);
+          guardar();
+          renderView();
+          return;
+        }
+
+        case "devolver-resp": {
+          if (!survey) return;
+          survey.excluded = (survey.excluded || []).filter((id) => id !== arg);
+          survey.respondents = [...new Set([...(survey.respondents || []), arg])];
+          guardar();
+          renderView();
+          return;
+        }
+
+        case "emp-tab":
+          state.empTab = arg;
+          renderView();
+          return;
+
+        case "result-detail": {
+          state.resultado = null;
+          state.view = "result-detail";
+          state.module = "surveys";
+          renderApp();
+          state.resultado = await DL.api.resultado(arg);
+          renderView();
+          return;
+        }
+
+        case "work-findings":
+          showToast("Los hallazgos se administran en el módulo de Hallazgos.");
           return;
 
         case "next-step": {
@@ -625,7 +1123,9 @@
           state.selectedWorkId = arg;
           state.module = "works";
           state.view = "work-detail";
+          state.workSurveys = null;
           renderApp();
+          cargarEncuestasDelTrabajo(arg);
           return;
 
         case "survey-from-work": {
@@ -664,8 +1164,29 @@
   }
 
   function onInput(event) {
-    if (!state.draft) return;
     const target = event.target;
+
+    /* Los filtros de los listados viven fuera del editor */
+    if (target.matches("[data-filtro]")) {
+      filtrosEnc()[target.dataset.filtro] = target.value;
+      escribirFiltros(LS.enc, state.filtros);
+      refrescarListado("buscarEncuesta");
+      return;
+    }
+    if (target.matches("[data-filtro-trabajo]")) {
+      filtrosTra()[target.dataset.filtroTrabajo] = target.value;
+      escribirFiltros(LS.tra, state.filtrosTrabajos);
+      refrescarListado("buscarTrabajo");
+      return;
+    }
+    if (target.matches("[data-filtro-emp]")) {
+      filtrosEmp()[target.dataset.filtroEmp] = target.value;
+      escribirFiltros(LS.emp, state.filtrosEmp);
+      refrescarListado("buscarEmpleado");
+      return;
+    }
+
+    if (!state.draft) return;
 
     if (target.matches("[data-survey-field]")) {
       state.draft[target.dataset.surveyField] = target.value;
@@ -705,9 +1226,69 @@
   }
 
   function onChange(event) {
-    if (!state.draft) return;
     const target = event.target;
+
+    if (target.matches("[data-filtro]")) {
+      filtrosEnc()[target.dataset.filtro] = target.value;
+      escribirFiltros(LS.enc, state.filtros);
+      renderView();
+      return;
+    }
+    if (target.matches("[data-filtro-trabajo]")) {
+      filtrosTra()[target.dataset.filtroTrabajo] = target.value;
+      escribirFiltros(LS.tra, state.filtrosTrabajos);
+      renderView();
+      return;
+    }
+    if (target.matches("[data-filtro-check]")) {
+      filtrosEnc()[target.dataset.filtroCheck] = target.checked;
+      escribirFiltros(LS.enc, state.filtros);
+      renderView();
+      return;
+    }
+    if (target.matches("[data-filtro-emp]")) {
+      filtrosEmp()[target.dataset.filtroEmp] = target.value;
+      escribirFiltros(LS.emp, state.filtrosEmp);
+      renderView();
+      return;
+    }
+    if (target.matches("[data-filtro-emp-check]")) {
+      filtrosEmp()[target.dataset.filtroEmpCheck] = target.checked;
+      escribirFiltros(LS.emp, state.filtrosEmp);
+      renderView();
+      return;
+    }
+
+    if (!state.draft) return;
     const survey = state.draft;
+
+    /* Área o modo de asignación: se vuelven a calcular los respondedores */
+    if (target.matches('[data-survey-field="areaKey"], [data-survey-field="assignMode"]')) {
+      survey[target.dataset.surveyField] = target.value;
+      if (target.dataset.surveyField === "assignMode") {
+        survey.excluded = [];
+        if (target.value === "Manual") survey.respondents = [];
+      }
+      guardar();
+      recalcularAlcance({ conservarQuitados: target.dataset.surveyField === "areaKey" ? false : true });
+      return;
+    }
+    if (target.matches("[data-resp-pick]")) {
+      const id = target.dataset.respPick;
+      const lista = new Set(survey.respondents || []);
+      if (target.checked) lista.add(id);
+      else lista.delete(id);
+      survey.respondents = [...lista];
+      guardar();
+      /* Solo se actualizan los contadores: así se pueden marcar varios seguidos */
+      const contador = document.querySelector(".asig-item--pink:last-child b");
+      if (contador) contador.textContent = `${survey.respondents.length} colaborador(es)`;
+      const registros = document.querySelector(".wk-count");
+      if (registros) registros.textContent = `${survey.respondents.length} registro(s)`;
+      const fila = target.closest("tr");
+      if (fila) fila.classList.toggle("fila-fuera", !target.checked);
+      return;
+    }
 
     if (target.matches("[data-survey-field]")) {
       survey[target.dataset.surveyField] = target.dataset.surveyField === "anonymous" ? target.value === "true" : target.value;
@@ -726,6 +1307,12 @@
       guardar();
       renderView();
       refreshPreview();
+      return;
+    }
+    if (target.matches("[data-sched-check]")) {
+      survey.schedule[target.dataset.schedCheck] = target.checked;
+      guardar();
+      renderView();
       return;
     }
     if (target.matches("[data-sched-field]")) {
@@ -863,6 +1450,18 @@
     renderView();
   }
 
+  /* Quién está dentro, en la barra de arriba */
+  function pintarUsuario(empleado) {
+    const avatar = document.getElementById("userAvatar");
+    const nombre = document.getElementById("userName");
+    const rol = document.getElementById("userRole");
+    const salir = document.getElementById("logoutBtn");
+    if (avatar) avatar.textContent = DL_SESION.iniciales(empleado.name);
+    if (nombre) nombre.textContent = empleado.name;
+    if (rol) rol.textContent = empleado.position || "";
+    if (salir) salir.addEventListener("click", () => DL_SESION.salir("../"));
+  }
+
   function renderModuleNav() {
     els.moduleNav.innerHTML =
       modules
@@ -895,13 +1494,20 @@
         <button class="side-link active" type="button" data-view="work-list">▧ Trabajos</button>`;
       return;
     }
+
+    /* En Laboratorio va el personal y el estado de WhatsApp */
+    if (state.module === "lab") {
+      els.sidebar.innerHTML = `
+        <div class="side-title">LABORATORIO</div>
+        <button class="side-link ${state.view === "employees" ? "active" : ""}" type="button" data-view="employees">▧ Empleados</button>
+        <button class="side-link ${state.view === "whatsapp" ? "active" : ""}" type="button" data-view="whatsapp">◱ WhatsApp</button>`;
+      return;
+    }
+
     els.sidebar.innerHTML = `
       <div class="side-title">ENCUESTAS</div>
       <button class="side-link ${["survey-list", "survey-edit"].includes(state.view) ? "active" : ""}" type="button" data-view="survey-list">▧ Encuestas</button>
-      <button class="side-link ${state.view === "sends" ? "active" : ""}" type="button" data-view="sends">✈ Envíos</button>
-      <button class="side-link ${state.view === "answers" ? "active" : ""}" type="button" data-view="answers">✓ Respuestas</button>
-      <button class="side-link ${state.view === "results" ? "active" : ""}" type="button" data-view="results">▧ Resultados por área</button>
-      <button class="side-link ${state.view === "whatsapp" ? "active" : ""}" type="button" data-view="whatsapp">◱ WhatsApp</button>
+      <button class="side-link ${["results-list", "result-detail"].includes(state.view) ? "active" : ""}" type="button" data-view="results-list">✓ Resultados de encuestas</button>
       <div class="side-foot"><button class="mini-btn" type="button" data-act="reset-demo">↺ Restaurar demo</button></div>`;
   }
 
@@ -915,6 +1521,10 @@
       whatsapp: renderWhatsapp,
       "work-list": renderWorkList,
       "work-detail": renderWorkDetail,
+      employees: renderEmpleados,
+      "employee-detail": renderEmpleadoDetalle,
+      "results-list": renderResultadosLista,
+      "result-detail": renderResultadoDetalle,
     };
     if (["survey-edit"].includes(state.view) && !state.draft) state.view = "survey-list";
     if (state.view === "sends" && !state.draft) {
@@ -935,9 +1545,9 @@
   /* ---------------- Lista ---------------- */
   function renderSurveyList() {
     const all = state.surveys;
-    const list = all.filter((survey) =>
-      state.listFilter === "all" ? true : survey.classification === (state.listFilter === "ext" ? "Externa" : "Interna")
-    );
+    const f = filtrosEnc();
+    const list = encuestasFiltradas();
+    const cuenta = cuentaFiltros(f, FILTROS_ENC);
     const counts = {
       all: all.length,
       ext: all.filter((s) => s.classification === "Externa").length,
@@ -945,53 +1555,75 @@
     };
 
     return `
-      <div class="toolbar-strip">
-        <div class="view-tabs">
-          <button class="tab-lite ${state.listFilter === "all" ? "active" : ""}" type="button" data-act="filter" data-arg="all">☷ Todas (${counts.all})</button>
-          <button class="tab-lite ${state.listFilter === "ext" ? "active" : ""}" type="button" data-act="filter" data-arg="ext">Externas (${counts.ext})</button>
-          <button class="tab-lite ${state.listFilter === "int" ? "active" : ""}" type="button" data-act="filter" data-arg="int">Internas (${counts.int})</button>
+      <div class="dl-tabs ${state.openMenu === "nueva" ? "menu-open" : ""}">
+        <div class="dl-tabs-list">
+          <button class="dl-tab ${state.listFilter === "all" ? "is-active" : ""}" type="button" data-act="filter" data-arg="all">Todas (${counts.all})</button>
+          <button class="dl-tab ${state.listFilter === "ext" ? "is-active" : ""}" type="button" data-act="filter" data-arg="ext">Externas (${counts.ext})</button>
+          <button class="dl-tab ${state.listFilter === "int" ? "is-active" : ""}" type="button" data-act="filter" data-arg="int">Internas (${counts.int})</button>
         </div>
-        <div class="menu-wrap">
-          <button class="btn primary" type="button" data-menu="nueva">＋ Nueva encuesta ▾</button>
-          ${state.openMenu === "nueva" ? `
-            <div class="menu-pop nueva">
-              <button type="button" data-act="create" data-arg="Interna">Interna</button>
-              <button type="button" data-act="create" data-arg="Externa">Externa</button>
-            </div>` : ""}
+        <div class="dl-tabs-actions">
+          <div class="menu-wrap">
+            <button class="dl-tab-action dl-tab-action--primary" type="button" data-menu="nueva">＋ Nueva encuesta ▾</button>
+            ${state.openMenu === "nueva" ? `
+              <div class="menu-pop nueva">
+                <button type="button" data-act="create" data-arg="Interna">Interna</button>
+                <button type="button" data-act="create" data-arg="Externa">Externa</button>
+              </div>` : ""}
+          </div>
         </div>
       </div>
 
-      <section class="page-card">
-        <div class="table-wrap ${state.openMenu.startsWith("s-") ? "menu-open" : ""}">
-          <table class="data-table">
-            <thead><tr><th>Encuesta</th><th>Clasificación</th><th>Responde</th><th>Programación</th><th>Envíos</th><th>Estado</th><th>Opciones</th></tr></thead>
+      <section class="dl-card ${state.openMenu ? "menu-open" : ""}">
+        <div class="dl-filters">
+          ${barraFiltros(state.filtrosOpen, cuenta)}
+          ${state.filtrosOpen ? `
+            <div class="dl-filter-panel">
+              ${campoFiltro("Clasificación", "clasificacion", ["Externa", "Interna"], f.clasificacion)}
+              ${campoFiltro("Estado", "estado", ["Borrador", "Activa", "Inactiva"], f.estado)}
+              ${campoFiltro("Subcategoría", "subcategoria", unicos(all, "subtype"), f.subcategoria)}
+              ${campoFiltro("Repetición", "repeticion", ["No repetir", "Mensual", "Trimestral", "Anual"], f.repeticion)}
+              ${campoFiltro("Responde", "responde", unicos(all, "respondent"), f.responde)}
+              <label class="dl-field dl-field--wide"><span>Búsqueda</span>
+                <div class="dl-search">
+                  <span class="dl-ico">⌕</span>
+                  <input id="buscarEncuesta" data-filtro="texto" value="${attr(f.texto)}" placeholder="Encuesta, subcategoría o quién responde…">
+                  ${f.texto ? `<button class="dl-search-clear" type="button" data-act="limpiar-texto" title="Limpiar">✕</button>` : ""}
+                </div>
+              </label>
+              <label class="dl-field dl-field--check"><span>Estado del registro</span>
+                <span class="dl-check-box ${f.inactivas ? "is-checked" : ""}"><input type="checkbox" data-filtro-check="inactivas" ${f.inactivas ? "checked" : ""}> Mostrar inactivas</span>
+              </label>
+            </div>` : ""}
+        </div>
+
+        <div class="dl-table-wrap">
+          <table class="dl-table">
+            <thead><tr>
+              <th>Encuesta</th><th>Clasificación</th><th>Responde</th><th>Programación</th>
+              <th>Próxima</th><th>Envíos</th><th>Estado</th><th class="dl-col-opts">Opciones</th>
+            </tr></thead>
             <tbody>
-              ${list
+              ${list.length === 0 ? `<tr><td colspan="8">Ninguna encuesta coincide con los filtros.</td></tr>` : list
                 .map((survey) => {
                   const externa = survey.classification === "Externa";
                   const preguntas = survey.sections.reduce((total, section) => total + section.questions.length, 0);
+                  const respondidas = survey._respondidas || 0;
                   return `
-                    <tr class="${externa ? "row-external" : ""}">
-                      <td><b>${esc(survey.name)}</b><span class="tiny">${esc(survey.subtype)} · ${survey.sections.length} categorías · ${preguntas} preguntas</span></td>
-                      <td><span class="badge ${externa ? "pink" : "neutral"}">${esc(survey.classification)}</span></td>
+                    <tr class="dl-row-link" data-row-open="edit" data-row-arg="${esc(survey.id)}" title="Abrir la encuesta">
+                      <td><b>${esc(survey.name)}</b> <i>${esc(survey.subtype)} · ${survey.sections.length} cat · ${preguntas} preg</i></td>
+                      <td><span class="dl-badge ${externa ? "pink" : ""}">${esc(survey.classification)}</span></td>
                       <td>${esc(survey.respondent)}</td>
-                      <td><b>${esc(survey.schedule.repeat)}</b><span class="tiny">${
-                        survey.schedule.repeat === "No repetir"
-                          ? "Sin agenda"
-                          : `Día ${esc(survey.schedule.generationDay)} ${esc(survey.schedule.time)} → cierra ${esc(survey.schedule.closeDay)}`
-                      }</span>${survey._proxima ? `<span class="tiny next">Próxima: ${esc(survey._proxima)}</span>` : ""}</td>
+                      <td>${esc(survey.schedule.repeat)}${survey.schedule.repeat === "No repetir" ? "" : ` · día ${esc(survey.schedule.generationDay)} ${esc(survey.schedule.time)} → cierra ${esc(survey.schedule.closeDay)}`}</td>
+                      <td>${esc(survey._proxima || "—")}</td>
                       <td>${survey._instancias || 0}</td>
-                      <td><span class="badge ${survey.status === "Activa" ? "" : "neutral"}">${esc(survey.status.toUpperCase())}</span></td>
-                      <td class="row-actions">
+                      <td><span class="dl-badge ${survey.status === "Activa" ? "ok" : survey.status === "Inactiva" ? "off" : "warn"}">${esc(survey.status.toUpperCase())}</span></td>
+                      <td class="dl-col-opts">
                         <div class="menu-wrap">
-                          <button class="mini-btn menu-trigger ${state.openMenu === "s-" + survey.id ? "on" : ""}" type="button" data-menu="s-${esc(survey.id)}">Opciones ▾</button>
+                          <button class="dl-mini ${state.openMenu === "s-" + survey.id ? "on" : ""}" type="button" data-menu="s-${esc(survey.id)}">Opciones ▾</button>
                           ${state.openMenu === "s-" + survey.id ? `
                             <div class="menu-pop">
-                              <button type="button" data-act="edit" data-arg="${esc(survey.id)}">✎ Abrir</button>
-                              <button type="button" data-act="edit" data-arg="${esc(survey.id)}" data-target="questions">▧ Preguntas</button>
-                              <button type="button" data-act="preview" data-arg="${esc(survey.id)}">◎ Vista previa</button>
                               <button type="button" data-act="sends" data-arg="${esc(survey.id)}">✈ Envíos</button>
-                              <button type="button" data-act="duplicate" data-arg="${esc(survey.id)}">⧉ Duplicar</button>
+                              ${respondidas ? `<button type="button" data-act="answers-survey" data-arg="${esc(survey.id)}">✓ Respuestas (${respondidas})</button>` : ""}
                               <button type="button" data-act="toggle-status" data-arg="${esc(survey.id)}">${survey.status === "Activa" ? "✕ Desactivar" : "✓ Activar"}</button>
                               <button class="danger" type="button" data-act="delete" data-arg="${esc(survey.id)}">🗑 Eliminar</button>
                             </div>` : ""}
@@ -1003,8 +1635,8 @@
             </tbody>
           </table>
         </div>
-      </section>
-      <div class="bottom-actions"><span>Mostrando ${list.length} de ${all.length} encuestas</span><span>‹ 1 ›</span></div>`;
+        <div class="dl-table-foot"><span>${list.length} de ${all.length} encuesta(s)</span></div>
+      </section>`;
   }
 
   /* ---------------- Editor ---------------- */
@@ -1019,7 +1651,7 @@
           <div class="editor-id">
             <span class="badge ${isExternal() ? "pink" : "neutral"}">${esc(survey.classification.toUpperCase())}</span>
             <b id="editorTitle">${esc(survey.name)}</b>
-            <span class="tiny">${esc(survey.subtype)} · ${esc(survey.status)}</span>
+            <span class="tiny">${esc(survey.subtype)}</span>
           </div>
           <div>
             <button class="mini-btn" type="button" data-act="preview">◎ Vista previa</button>
@@ -1040,14 +1672,11 @@
 
         ${body}
 
-        <div class="bottom-actions sticky">
-          <span class="save-state" id="saveState">Se han guardado todos los cambios</span>
-          <div>
-            ${stepIndex > 0 ? `<button class="btn" type="button" data-act="prev-step">← Anterior</button>` : ""}
-            ${stepIndex < STEPS.length - 1
-              ? `<button class="btn primary" type="button" data-act="next-step">Siguiente: ${STEPS[stepIndex + 1][1]} →</button>`
-              : `<button class="btn primary" type="button" data-act="publish">Publicar encuesta</button>`}
-          </div>
+        <div class="form-actions">
+          <button class="dercas-btn ok" type="button" data-act="crear-encuesta">✓ Crear encuesta</button>
+          <button class="dercas-btn" type="button" data-act="guardar-borrador">↓ Guardar como borrador</button>
+          ${isExternal() ? `<button class="dercas-btn" type="button" data-act="crear-y-enviar">➤ Crear y enviar</button>` : ""}
+          <button class="dercas-btn cancel" type="button" data-act="cancelar">✕ Cancelar</button>
         </div>
       </div>`;
   }
@@ -1058,43 +1687,134 @@
     return `
       <section class="page-card">
         <h2 class="card-title"><span class="pink-icon">▧</span> Datos generales</h2>
-        <div class="summary-grid">
-          <div class="form-grid">
-            <label class="field span2"><span>Nombre de la encuesta *</span><input data-survey-field="name" value="${attr(survey.name)}"></label>
-            <label class="field span2"><span>Descripción <small>es el texto que ve quien responde al abrir la encuesta</small></span><textarea rows="3" data-survey-field="description">${esc(survey.description)}</textarea></label>
-            <label class="field"><span>Subcategoría</span><select data-survey-field="subtype">${options(external ? ["Servicio y Calidad", "Encuesta general", "Nuevos productos"] : ["Liderazgo", "Clima laboral", "Capacitación", "Eventos y actividades", "Encuesta general"], survey.subtype)}</select></label>
-            <label class="field"><span>Estado</span><select data-survey-field="status">${options(["Borrador", "Activa", "Inactiva"], survey.status)}</select></label>
+        <div class="form-grid">
+          <label class="field span2"><span>Nombre de la encuesta *</span><input data-survey-field="name" value="${attr(survey.name)}"></label>
+          <label class="field span2"><span>Descripción <small>es el texto que ve quien responde al abrir la encuesta</small></span><textarea rows="3" data-survey-field="description">${esc(survey.description)}</textarea></label>
+          ${!external ? `
+            <div class="field span2"><span>Sugerencias</span>
+              <label class="switch-row big"><input type="checkbox" data-survey-check="suggestions" ${survey.suggestions !== false ? "checked" : ""}> Activa el comentario general al final de la encuesta.</label>
+            </div>` : ""}
+          <label class="field span2"><span>Subcategoría</span><select data-survey-field="subtype">${options(external ? ["Servicio y Calidad", "Encuesta general", "Nuevos productos"] : ["Liderazgo", "Clima laboral", "Capacitación", "Eventos y actividades", "Encuesta general"], survey.subtype)}</select></label>
+        </div>
 
+        ${survey.works.enabled ? `
+          <div class="periodo-box">
+            <div class="periodo-head">
+              <div><b>Período evaluado</b><span>Define qué órdenes entran en la encuesta.</span></div>
+              <label class="switch-row"><input type="checkbox" data-survey-check="periodAuto" ${survey.periodAuto !== false ? "checked" : ""}> Automático</label>
+            </div>
+            ${survey.periodAuto !== false ? `
+              <p class="periodo-auto">Siempre el <b>mes calendario anterior</b>. Hoy sería <b>${esc(etiquetaPeriodo())}</b> (${esc(bonita(survey.periodFrom))} al ${esc(bonita(survey.periodTo))}).</p>
+            ` : `
+              <div class="form-grid g4">
+                <label class="field"><span>Desde *</span><input type="date" data-survey-field="periodFrom" value="${attr(survey.periodFrom || "")}"></label>
+                <label class="field"><span>Hasta *</span><input type="date" data-survey-field="periodTo" value="${attr(survey.periodTo || "")}"></label>
+                <label class="field span2"><span>Período</span><input value="${attr(etiquetaPeriodo())}" readonly></label>
+              </div>
+            `}
+            <p class="tiny">Con este período hay <b>${elegibles().length}</b> orden(es) enviadas, de <b>${[...new Set(elegibles().map((w) => w.doctor))].length}</b> doctor(es).</p>
           </div>
-          <aside class="side-summary">
-            <div><b>${external ? "Encuesta externa" : "Encuesta interna"}</b><span>${external ? "Se dirige a doctores, usa las órdenes del período y se envía por WhatsApp." : "Se dirige al personal por área o supervisor."}</span></div>
-            <div><b>Vista previa en vivo</b><span>Lo que configure se refleja de inmediato: la vista previa es la encuesta real.</span></div>
-            <button class="btn primary full" type="button" data-act="preview">◎ Ver cómo se responde</button>
-          </aside>
+        ` : ""}
+      </section>`;
+  }
+
+  /* ==================================================================
+     Público de una encuesta INTERNA
+     Mismo modelo del sistema: modo de asignación, área del organigrama,
+     supervisor evaluado y la lista de personas que responderán.
+     ================================================================== */
+  const MODOS_ASIGNACION = ["Por supervisor", "Por supervisor sin encargados", "Manual"];
+
+  function audienciaInterna(survey) {
+    const alcance = state.alcanceInterno;
+    const manual = survey.assignMode === "Manual";
+    const elegidos = survey.respondents || [];
+    const gente = manual ? (state.empleadosLista || []) : (alcance ? alcance.gente : []);
+    const fuera = survey.excluded || [];
+    const marcados = manual ? gente.filter((g) => elegidos.includes(g.id)) : gente.filter((g) => !fuera.includes(g.id));
+    const arbol = DL.AREAS_ARBOL || [];
+
+    return `
+      <section class="page-card">
+        <h2 class="card-title"><span class="pink-icon">▣</span> ¿Quiénes van a responder?</h2>
+        <div class="form-grid g4">
+          <label class="field span2"><span>Modo de asignación *</span>
+            <select data-survey-field="assignMode">${options(MODOS_ASIGNACION, survey.assignMode)}</select>
+            <small>${
+              manual
+                ? "Elija a mano quién responde."
+                : survey.assignMode === "Por supervisor sin encargados"
+                  ? "Toma el área y sus subáreas, pero deja fuera a los encargados de subárea."
+                  : "Toma el área seleccionada y todas sus subáreas."
+            }</small>
+          </label>
+          <label class="field span2"><span>Área *</span>
+            <select data-survey-field="areaKey" ${manual ? "disabled" : ""}>
+              ${arbol.map((item) => `<option value="${attr(item.area)}" ${item.area === survey.areaKey ? "selected" : ""}>${esc(item.etiqueta)}</option>`).join("")}
+            </select>
+          </label>
+          <label class="field span2"><span>Supervisor asignado *</span>
+            <input value="${attr((alcance && alcance.supervisor) || survey.supervisorName || "—")}" readonly>
+            <small>Es la persona que se evalúa en esta encuesta.</small>
+          </label>
+          <label class="field span2"><span>Respuestas</span>
+            <select data-survey-field="anonymous"><option value="true" ${survey.anonymous ? "selected" : ""}>Anónimas</option><option value="false" ${!survey.anonymous ? "selected" : ""}>Identificadas</option></select>
+          </label>
+        </div>
+
+        <div class="asig-box">
+          <b>${manual ? "Asignación manual" : "Asignación automática por supervisor"}</b>
+          <div class="asig-grid">
+            <div class="asig-item"><span>Supervisor asignado</span><b>${esc((alcance && alcance.supervisor) || survey.supervisorName || "—")}</b></div>
+            <div class="asig-item asig-item--pink"><span>Evaluado</span><b>${esc((alcance && alcance.supervisor) || survey.supervisorName || "—")}</b></div>
+            <div class="asig-item asig-item--pink"><span>Respondedores</span><b>${marcados.length} colaborador(es)</b></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="dl-card">
+        <div class="wk-block-head">
+          <div><b>Personas que responderán la encuesta</b><span>${manual ? "Marque a quienes deben responder." : "Se calculan con el área y el modo; puede quitar a quien no deba responder."}</span></div>
+          <span class="wk-count">${marcados.length} registro(s)</span>
+        </div>
+
+        ${!manual && alcance && alcance.avisos.length
+          ? alcance.avisos.map((aviso) => `<p class="asig-aviso">${esc(aviso)}</p>`).join("")
+          : ""}
+
+        <div class="dl-table-wrap">
+          <table class="dl-table">
+            <thead><tr>${manual ? "<th class=\"dl-col-check\"></th>" : ""}<th>Nombre</th><th>Puesto</th><th>Área</th><th>Correo</th><th class="dl-col-opts">Acciones</th></tr></thead>
+            <tbody>
+              ${gente.length === 0
+                ? `<tr><td colspan="${manual ? 6 : 5}">${alcance === null ? "Calculando los respondedores…" : "No hay colaboradores para esta área."}</td></tr>`
+                : gente.map((persona) => {
+                    const dentro = manual ? elegidos.includes(persona.id) : !(survey.excluded || []).includes(persona.id);
+                    return `
+                      <tr class="${dentro ? "" : "fila-fuera"}">
+                        ${manual ? `<td class="dl-col-check"><input type="checkbox" data-resp-pick="${attr(persona.id)}" ${dentro ? "checked" : ""}></td>` : ""}
+                        <td><b>${esc(persona.name)}</b></td>
+                        <td>${esc(persona.position)}</td>
+                        <td>${esc(persona.area)}</td>
+                        <td>${esc(persona.email)}</td>
+                        <td class="dl-col-opts">
+                          ${manual
+                            ? ""
+                            : dentro
+                              ? `<button class="dl-mini" type="button" data-act="quitar-resp" data-arg="${attr(persona.id)}" title="Quitar de la encuesta">🗑</button>`
+                              : `<button class="dl-mini" type="button" data-act="devolver-resp" data-arg="${attr(persona.id)}" title="Volver a incluir">↺</button>`}
+                        </td>
+                      </tr>`;
+                  }).join("")}
+            </tbody>
+          </table>
         </div>
       </section>`;
   }
 
   function stepAudience() {
     const survey = draft();
-    if (!isExternal()) {
-      return `
-        <section class="page-card">
-          <h2 class="card-title"><span class="pink-icon">▣</span> ¿Quiénes van a responder?</h2>
-          <div class="form-grid g4">
-            <label class="field"><span>Asignación *</span><select data-survey-field="audienceMode">${options(["Por área y supervisor", "Por supervisor", "Por área", "Selección manual", "Toda la empresa"], survey.audienceMode)}</select></label>
-            <label class="field"><span>Respuestas</span><select data-survey-field="anonymous"><option value="true" ${survey.anonymous ? "selected" : ""}>Anónimas</option><option value="false" ${!survey.anonymous ? "selected" : ""}>Identificadas</option></select></label>
-          </div>
-          <div class="area-pick">
-            <b>Áreas incluidas</b>
-            <div class="mode-check-grid areas">
-              ${["Área de Administración", "Área de Control de Producción/PPR", "Área de Estructuras 1", "Área de Estructuras 2", "Área de Mensajería", "Área de Servicio al Cliente", "RRHH"]
-                .map((area) => `<label class="mode-check ${(survey.audienceAreas || []).includes(area) ? "selected" : ""}"><input type="checkbox" data-area-pick="${attr(area)}" ${(survey.audienceAreas || []).includes(area) ? "checked" : ""}><span><b>${esc(area)}</b></span></label>`)
-                .join("")}
-            </div>
-          </div>
-        </section>`;
-    }
+    if (!isExternal()) return audienciaInterna(survey);
 
     const eligible = elegibles();
     const manual = survey.audienceMode === "Selección manual";
@@ -1186,38 +1906,35 @@
       <section class="page-card">
         <h2 class="card-title"><span class="pink-icon">▣</span> ¿Cada cuánto se ejecuta?</h2>
         <div class="form-grid g4">
-          <label class="field"><span>Repetición *</span><select data-sched-field="repeat">${options(["No repetir", "Mensual", "Trimestral", "Anual"], survey.schedule.repeat)}</select></label>
-          ${repite ? `
-            <label class="field"><span>Día de generación</span><input type="number" min="1" max="28" data-sched-field="generationDay" value="${attr(survey.schedule.generationDay)}"></label>
-            <label class="field"><span>Hora</span><input type="time" data-sched-field="time" value="${attr(survey.schedule.time)}"></label>
-            <label class="field"><span>Día de cierre</span><input type="number" min="1" max="28" data-sched-field="closeDay" value="${attr(survey.schedule.closeDay)}"></label>
-          ` : ""}
-          <label class="field span2"><span>Próxima ejecución</span><input value="${attr(survey.schedule.nextRun || "—")}" readonly></label>
-          <label class="field"><span>Última ejecución</span><input value="${attr(survey.schedule.lastRun || "—")}" readonly></label>
+          <label class="field"><span>Repetición *</span>
+            <select data-sched-field="repeat">${options(["No repetir", "Mensual", "Trimestral", "Anual"], survey.schedule.repeat)}</select>
+            <small>${
+              survey.schedule.repeat === "No repetir"
+                ? "Corre una sola vez, en la fecha y hora de inicio"
+                : `${survey.schedule.repeat === "Mensual" ? "Todos los meses" : survey.schedule.repeat === "Trimestral" ? "Cada 3 meses" : "Una vez al año"} el día ${diaDeInicio(survey)} a las ${horaDeInicio(survey)}`
+            }</small>
+          </label>
+          <div class="field span2"><span>Inicio disponibilidad *</span>
+            <div class="ventana-fila">
+              <input type="date" data-sched-field="startDate" value="${attr(survey.schedule.startDate || "")}">
+              <input type="time" data-sched-field="startTime" value="${attr(survey.schedule.startTime || "07:00")}">
+            </div>
+          </div>
+          <div class="field span2"><span>Fin disponibilidad *</span>
+            <div class="ventana-fila">
+              <input type="date" data-sched-field="endDate" value="${attr(survey.schedule.endDate || "")}">
+              <input type="time" data-sched-field="endTime" value="${attr(survey.schedule.endTime || "23:59")}">
+            </div>
+          </div>
+
+          <label class="field span2"><span>Primera ejecución</span><input value="${attr(corridas(survey).primera)}" readonly></label>
+          <label class="field"><span>Próxima ejecución</span><input value="${attr(corridas(survey).proxima)}" readonly></label>
+          <label class="field span2"><span>Última ejecución</span><input value="${attr(survey.schedule.lastRun || "—")}" readonly></label>
         </div>
 
-        ${survey.works.enabled ? `
-          <div class="periodo-box">
-            <div class="periodo-head">
-              <div><b>¿Qué órdenes entran en la encuesta?</b></div>
-              <label class="switch-row"><input type="checkbox" data-survey-check="periodAuto" ${survey.periodAuto !== false ? "checked" : ""}> Automático</label>
-            </div>
-            ${survey.periodAuto !== false ? `
-              <p class="periodo-auto">Siempre el <b>mes calendario anterior</b>. Hoy sería <b>${esc(etiquetaPeriodo())}</b> (${esc(bonita(survey.periodFrom))} al ${esc(bonita(survey.periodTo))}).</p>
-            ` : `
-              <div class="form-grid g4">
-                <label class="field"><span>Desde *</span><input type="date" data-survey-field="periodFrom" value="${attr(survey.periodFrom || "")}"></label>
-                <label class="field"><span>Hasta *</span><input type="date" data-survey-field="periodTo" value="${attr(survey.periodTo || "")}"></label>
-                <label class="field span2"><span>Período</span><input value="${attr(etiquetaPeriodo())}" readonly></label>
-              </div>
-            `}
-            <p class="tiny">Con este período hay <b>${elegibles().length}</b> orden(es) enviadas, de <b>${[...new Set(elegibles().map((w) => w.doctor))].length}</b> doctor(es).</p>
-          </div>
-        ` : ""}
-
         <div class="agenda-test">
-          <div><b>Probar la agenda sin esperar al día ${esc(survey.schedule.generationDay)}</b>
-            <span>Programa una corrida real dentro de unos minutos: generará las encuestas y las enviará por WhatsApp.</span>
+          <div><b>${repite ? `Probar la agenda sin esperar al día ${diaDeInicio(survey)}` : "Probar la corrida sin esperar la fecha de inicio"}</b>
+            <span>Programa una corrida real dentro de unos minutos: generará ${external ? "una encuesta por doctor" : "una encuesta por colaborador"}${survey.channel === "API WhatsApp" ? " y las enviará por WhatsApp" : " y dejará listo el enlace de cada persona"}.</span>
             ${prueba ? `<span class="next">Prueba programada para ${new Date(prueba).toLocaleTimeString("es-GT", { hour12: false })}</span>` : ""}
           </div>
           <div class="load-actions">
@@ -1233,7 +1950,9 @@
         <h2 class="card-title"><span class="pink-icon">✈</span> Envío</h2>
         <div class="form-grid g4">
           <label class="field"><span>Canal *</span><select data-survey-field="channel">${options(external ? ["API WhatsApp", "Enlace directo"] : ["Enlace directo", "Correo interno"], survey.channel)}</select></label>
-          <label class="field span3"><span>Número de prueba</span><input value="+${attr(state.estado ? state.estado.destino : "")} (todos los envíos de prueba llegan aquí)" readonly></label>
+          ${survey.channel === "API WhatsApp"
+            ? `<label class="field span3"><span>Número de prueba</span><input value="+${attr(state.estado ? state.estado.destino : "")} (todos los envíos de prueba llegan aquí)" readonly></label>`
+            : `<label class="field span3"><span>Cómo llega la encuesta</span><input value="${external ? "Cada doctor abre su enlace individual" : "Cada colaborador la responde desde el portal con su usuario"}" readonly></label>`}
           ${survey.channel === "API WhatsApp" ? `
             <label class="field span4"><span>Mensaje que acompaña el enlace *</span><textarea rows="3" data-survey-field="whatsappMessage">${esc(survey.whatsappMessage)}</textarea>
               <small>Variables: <code>{{doctor}}</code> <code>{{periodo}}</code> <code>{{casos}}</code> <code>{{cierre}}</code></small></label>` : ""}
@@ -1490,7 +2209,7 @@
       <section class="page-card">
         <h2 class="card-title"><span class="pink-icon">✓</span> Lista de verificación</h2>
         <div class="publish-check">${items.map(([label, ok]) => `<div class="${ok ? "ok" : "no"}"><span>${ok ? "✓" : "!"}</span>${esc(label)}</div>`).join("")}</div>
-        ${pending ? `<p class="empty-note">Faltan ${pending} punto(s) por completar.</p>` : `<p class="ready-note">Todo listo. Puede publicar la encuesta.</p>`}
+        ${pending ? `<p class="empty-note">Faltan ${pending} punto(s) por completar.</p>` : `<p class="ready-note">Todo listo. Ya puede crear la encuesta con el botón <b>Crear encuesta</b>.</p>`}
       </section>
       <section class="page-card">
         <h2 class="card-title">Resumen</h2>
@@ -1609,9 +2328,20 @@
     });
     const grupos = Object.entries(porInstancia);
 
+    const dueña = state.answersSurveyId ? state.surveys.find((item) => item.id === state.answersSurveyId) : null;
+
     return `
+      <div class="dl-tabs">
+        <div class="dl-tabs-list">
+          <button class="dl-tab is-active" type="button">Respuestas${dueña ? ` · ${esc(dueña.name)}` : ""}</button>
+        </div>
+        <div class="dl-tabs-actions">
+          ${state.answersSurveyId ? `<button class="dl-tab-action" type="button" data-act="sends" data-arg="${esc(state.answersSurveyId)}">✈ Envíos</button>` : ""}
+          <button class="dl-tab-action" type="button" data-view="survey-list">← Regresar</button>
+        </div>
+      </div>
       <div class="dercas-ribbon">
-        <div><b>Lo que respondieron los doctores</b><span>Cada encuesta completada, con su nota, motivos y comentario tal como los escribió el doctor.</span></div>
+        <div><b>Lo que respondieron ${dueña && dueña.classification === "Interna" ? "los colaboradores" : "los doctores"}</b><span>Cada encuesta completada, con su nota, motivos y comentario tal como los escribió quien respondió.</span></div>
         <div class="ribbon-tags"><span class="badge neutral">${grupos.length} encuesta(s) completada(s)</span><span class="badge pink">${respuestas.length} respuestas</span></div>
       </div>
       ${grupos.length
@@ -1808,63 +2538,762 @@ npm start</pre>` : ""}
 
   /* ---------------- Trabajos ---------------- */
   function renderWorkList() {
+    const f = filtrosTra();
+    const list = trabajosFiltrados();
+    const cuenta = cuentaFiltros(f, FILTROS_TRA);
+
+    const derecha = `
+      <div class="dl-toolbar-right">
+        <button class="dl-quick ${f.desde === DL.PERIODO_DESDE ? "is-active" : ""}" type="button" data-act="filtro-periodo">del período</button>
+      </div>`;
+
     return `
-      <div class="dercas-ribbon">
-        <div><b>Trabajos elegibles</b><span>Desde una orden puede crear la encuesta del doctor con todas sus órdenes del período.</span></div>
-        <div class="ribbon-tags"><span class="badge neutral">Estado ENVIADO</span></div>
+      <div class="dl-tabs">
+        <div class="dl-tabs-list">
+          <button class="dl-tab is-active" type="button">Trabajos (${list.length})</button>
+        </div>
       </div>
-      <section class="page-card">
-        <div class="table-wrap">
-          <table class="data-table">
-            <thead><tr><th>Código</th><th>Clínica</th><th>Doctor</th><th>Paciente</th><th>Producto</th><th>Enviado</th><th>Asesora</th><th>Estado</th><th>Acciones</th></tr></thead>
+
+      <section class="dl-card">
+        <div class="dl-filters">
+          <div class="dl-toolbar">
+            <button class="dl-filter-toggle ${state.filtrosTrabajosOpen ? "is-open" : ""}" type="button" data-act="toggle-filtros-trabajo">
+              <span class="dl-ico">⚙</span>${state.filtrosTrabajosOpen ? "Ocultar filtros" : "Ver filtros"}
+              ${cuenta ? `<span class="dl-filter-count">${cuenta}</span>` : ""}
+              <span class="dl-chevron">⌄</span>
+            </button>
+            <button class="dl-filter-clear" type="button" data-act="limpiar-filtros-trabajo" ${cuenta ? "" : "disabled"}>✕ Borrar filtros</button>
+            ${derecha}
+          </div>
+          ${state.filtrosTrabajosOpen ? `
+            <div class="dl-filter-panel">
+              ${campoTrabajo("Cliente", "clinica", unicos(DL.WORKS, "clinic"), f.clinica, "dl-field--wide")}
+              ${campoTrabajo("Doctor/a", "doctor", unicos(DL.WORKS, "doctor"), f.doctor)}
+              ${campoTrabajo("Caja", "caja", unicos(DL.WORKS, "box"), f.caja, "dl-field--tiny")}
+              ${campoTrabajo("Estado", "estado", unicos(DL.WORKS, "status"), f.estado)}
+              ${campoTrabajo("Producto", "producto", unicos(DL.WORKS, "product"), f.producto)}
+              ${campoTrabajo("Asesora", "asesora", unicos(DL.WORKS, "advisor"), f.asesora)}
+              <div class="dl-date-card">
+                <div class="dl-date-title">Envío</div>
+                <label class="dl-field"><span>Desde</span><input type="date" data-filtro-trabajo="desde" value="${attr(f.desde)}"></label>
+                <label class="dl-field"><span>Hasta</span><input type="date" data-filtro-trabajo="hasta" value="${attr(f.hasta)}"></label>
+              </div>
+              <label class="dl-field dl-field--wide"><span>Búsqueda</span>
+                <div class="dl-search">
+                  <span class="dl-ico">⌕</span>
+                  <input id="buscarTrabajo" data-filtro-trabajo="texto" value="${attr(f.texto)}" placeholder="Código, paciente, doctor o clínica…">
+                  ${f.texto ? `<button class="dl-search-clear" type="button" data-act="limpiar-texto-trabajo" title="Limpiar">✕</button>` : ""}
+                </div>
+              </label>
+            </div>` : ""}
+        </div>
+
+        <div class="dl-table-wrap">
+          <table class="dl-table">
+            <thead><tr>
+              <th>Código</th><th>Caja</th><th>Cliente</th><th>Doctor/a</th><th>Paciente</th>
+              <th>Producto</th><th>Envío</th><th>Asesora</th><th>Estado</th><th class="dl-col-opts">Opciones</th>
+            </tr></thead>
             <tbody>
-              ${DL.WORKS.map((work) => {
+              ${list.length === 0 ? `<tr><td colspan="10">Ningún trabajo coincide con los filtros.</td></tr>` : list.map((work) => {
                 const eligible = ["enviado", "facturado"].includes(work.status);
                 return `
-                  <tr>
-                    <td>${esc(work.code)}</td><td>${esc(work.clinic)}</td><td>${esc(work.doctor)}</td>
-                    <td>${esc(work.patient)}</td><td>${esc(work.product)}</td><td>${esc(work.sent)}</td>
-                    <td>${esc(work.advisor)}</td><td>${esc(work.status)}</td>
-                    <td class="row-actions">
-                      <button class="mini-btn" type="button" data-act="work-detail" data-arg="${esc(work.id)}">Ver</button>
-                      <button class="mini-btn ${eligible ? "primary" : ""}" type="button" data-act="survey-from-work" data-arg="${esc(work.id)}" ${eligible ? "" : "disabled"}>${eligible ? "Crear encuesta del doctor" : "No elegible"}</button>
+                  <tr class="dl-row-link" data-row-open="work-detail" data-row-arg="${esc(work.id)}" title="Ver el trabajo">
+                    <td><b>${esc(work.code)}</b></td>
+                    <td>${esc(work.box)}</td>
+                    <td>${esc(work.clinic)}</td>
+                    <td>${esc(work.doctor)}</td>
+                    <td>${esc(work.patient)}</td>
+                    <td>${esc(work.product)}</td>
+                    <td>${esc(work.sent)}</td>
+                    <td>${esc(work.advisor)}</td>
+                    <td><span class="dl-badge ${eligible ? "ok" : "warn"}">${esc(work.status)}</span></td>
+                    <td class="dl-col-opts">
+                      <div class="menu-wrap">
+                        <button class="dl-mini ${state.openMenu === "w-" + work.id ? "on" : ""}" type="button" data-menu="w-${esc(work.id)}">Opciones ▾</button>
+                        ${state.openMenu === "w-" + work.id ? `
+                          <div class="menu-pop">
+                            <button type="button" data-act="work-detail" data-arg="${esc(work.id)}">▤ Ver trabajo</button>
+                            <button type="button" data-act="survey-from-work" data-arg="${esc(work.id)}" ${eligible ? "" : "disabled"}>✚ Encuesta del doctor</button>
+                          </div>` : ""}
+                      </div>
                     </td>
                   </tr>`;
               }).join("")}
             </tbody>
           </table>
         </div>
+        <div class="dl-table-foot"><span>${list.length} de ${DL.WORKS.length} trabajo(s)</span></div>
       </section>`;
   }
 
+  function campoTrabajo(etiqueta, campo, opciones, valor, ancho = "") {
+    return `
+      <label class="dl-field ${ancho}"><span>${etiqueta}</span>
+        <select data-filtro-trabajo="${campo}">
+          <option value="">- Cualquiera -</option>
+          ${opciones.map((opcion) => `<option ${String(opcion) === String(valor) ? "selected" : ""}>${esc(opcion)}</option>`).join("")}
+        </select>
+      </label>`;
+  }
+
+  /* Resultado de la encuesta en la que entró esta orden */
+  async function cargarEncuestasDelTrabajo(workId) {
+    try {
+      state.workSurveys = await DL.api.encuestasDeTrabajo(workId);
+    } catch (error) {
+      state.workSurveys = [];
+    }
+    if (state.view === "work-detail") renderView();
+  }
+
+  const estrellas = (nota) => "★★★★★".slice(0, Math.round(Number(nota) || 0)).padEnd(5, "☆");
+
+  /* Puntuación que se ve junto al código del trabajo.
+     Solo hay nota si el doctor ya respondió (RN-ENC-011). */
+  function puntuacionTrabajo() {
+    if (state.workSurveys === null) return `<div class="wk-score cargando"><span>Encuesta del doctor</span><b>Consultando…</b></div>`;
+    if (!state.workSurveys.length) {
+      return `<div class="wk-score vacia"><span>Encuesta del doctor</span><b>No incluida en ninguna encuesta</b></div>`;
+    }
+    const ultima = state.workSurveys[0];
+    if (!ultima.respondida) {
+      return `
+        <div class="wk-score pendiente">
+          <span>Encuesta del doctor</span>
+          <b>${esc(ultima.state)}</b>
+          <i>${esc(ultima.period)} · sin respuesta todavía</i>
+        </div>`;
+    }
+    const nota = ultima.promedioOrden !== "—" ? ultima.promedioOrden : ultima.promedioEncuesta;
+    const baja = Number(nota) < 4;
+    return `
+      <div class="wk-score ${baja ? "baja" : "alta"}">
+        <span>Puntuación de la encuesta</span>
+        <b>${esc(nota)} <em>/ 5</em></b>
+        <i class="wk-stars">${estrellas(nota)}</i>
+        <i>${esc(ultima.period)}${ultima.promedioOrden === "—" ? " · evaluación general" : ""}</i>
+      </div>`;
+  }
+
+  function filaRespuesta(respuesta) {
+    const nota = Number(respuesta.calificacion) || 0;
+    return `
+      <tr>
+        <td><b>${esc(respuesta.pregunta)}</b></td>
+        <td>${esc(respuesta.area)}</td>
+        <td><span class="dl-badge ${nota >= 4 ? "ok" : nota ? "bad" : ""}">${respuesta.calificacion ? `${respuesta.calificacion} ★` : "—"}</span></td>
+        <td>${esc(respuesta.nivel === "GENERAL" ? "General" : "Por orden")}</td>
+        <td>${esc((respuesta.motivos || []).join(", ") || respuesta.valor || "—")}</td>
+        <td class="wk-comment">${esc(respuesta.comentario || "—")}</td>
+      </tr>`;
+  }
+
+  /* Bloque completo de la encuesta dentro de la ficha del trabajo */
+  function bloqueEncuestaTrabajo(work) {
+    if (state.workSurveys === null) {
+      return `<section class="dl-card"><div class="wk-block-head"><div><b>Encuesta del doctor</b><span>Consultando el resultado de esta orden…</span></div></div></section>`;
+    }
+    if (!state.workSurveys.length) {
+      return `
+        <section class="dl-card">
+          <div class="wk-block-head"><div><b>Encuesta del doctor</b><span>Resultado de la encuesta en la que entró esta orden.</span></div></div>
+          <p class="wk-note dl-muted">Esta orden todavía no forma parte de ninguna encuesta generada. Se incluirá cuando se genere la encuesta del período de ${esc(work.doctor)}.</p>
+        </section>`;
+    }
+
+    return state.workSurveys
+      .map((res) => {
+        const cabecera = `
+          <div class="wk-block-head">
+            <div><b>Encuesta del doctor · ${esc(res.surveyName)}</b><span>${esc(res.classification)}${res.subtype ? ` · ${esc(res.subtype)}` : ""} · período ${esc(res.period)} · ${res.totalOrdenes} orden(es) evaluadas</span></div>
+            <span class="dl-badge ${res.respondida ? "ok" : "warn"}">${esc(res.state)}</span>
+          </div>`;
+
+        if (!res.respondida) {
+          return `
+            <section class="dl-card">
+              ${cabecera}
+              <div class="wk-panel wk-panel--plain">
+                <div class="wk-item"><span>Enviada</span><b>${esc(res.sentAt || "—")}</b></div>
+                <div class="wk-item"><span>Abierta</span><b>${esc(res.openedAt || "—")}</b></div>
+                <div class="wk-item"><span>Respondida</span><b>—</b></div>
+                <div class="wk-item"><span>Puntuación</span><b>Sin puntuación: el doctor no ha respondido</b></div>
+              </div>
+            </section>`;
+        }
+
+        return `
+          <section class="dl-card">
+            ${cabecera}
+            <div class="wk-panel wk-panel--plain">
+              <div class="wk-item"><span>Promedio de esta orden</span><b class="${Number(res.promedioOrden) < 4 ? "wk-bad" : "wk-good"}">${esc(res.promedioOrden)} ${res.promedioOrden === "—" ? "" : "★"}</b></div>
+              <div class="wk-item"><span>Promedio de la encuesta</span><b>${esc(res.promedioEncuesta)} ★</b></div>
+              <div class="wk-item"><span>Respuestas de esta orden</span><b>${res.respuestasOrden.length}</b></div>
+              <div class="wk-item"><span>Enviada</span><b>${esc(res.sentAt || "—")}</b></div>
+              <div class="wk-item"><span>Abierta</span><b>${esc(res.openedAt || "—")}</b></div>
+              <div class="wk-item"><span>Respondida</span><b>${esc(res.finishedAt || "—")}</b></div>
+            </div>
+            <div class="dl-table-wrap">
+              <table class="dl-table">
+                <thead><tr><th>Pregunta</th><th>Área responsable</th><th>Calificación</th><th>Nivel</th><th>Motivos</th><th>Comentario</th></tr></thead>
+                <tbody>
+                  ${res.respuestasOrden.length ? res.respuestasOrden.map(filaRespuesta).join("") : `<tr><td colspan="6">Esta orden se evaluó dentro de la calificación general del doctor.</td></tr>`}
+                  ${res.respuestasGenerales.length ? `<tr class="wk-total"><td colspan="6">Evaluación general del doctor (no se atribuye a una orden ni a una asesora)</td></tr>${res.respuestasGenerales.map(filaRespuesta).join("")}` : ""}
+                </tbody>
+              </table>
+            </div>
+          </section>`;
+      })
+      .join("");
+  }
+
+  /* ==================================================================
+     LABORATORIO · Empleados
+     ================================================================== */
+  function renderEmpleados() {
+    const f = filtrosEmp();
+    const list = empleadosFiltrados();
+    const cuenta = cuentaFiltros(f, FILTROS_EMP);
+    const areas = unicos(state.empleados, "area");
+    const puestos = unicos(state.empleados.filter((e) => !f.area || e.area === f.area), "position");
+
+    return `
+      <div class="dl-tabs">
+        <div class="dl-tabs-list">
+          <button class="dl-tab is-active" type="button">Empleados (${list.length})</button>
+        </div>
+        <div class="dl-tabs-actions">
+          <button class="dl-tab-action" type="button" data-view="whatsapp">◱ WhatsApp</button>
+        </div>
+      </div>
+
+      <section class="dl-card">
+        <div class="dl-filters">
+          <div class="dl-toolbar">
+            <button class="dl-filter-toggle ${state.filtrosEmpOpen ? "is-open" : ""}" type="button" data-act="toggle-filtros-emp">
+              <span class="dl-ico">⚙</span>${state.filtrosEmpOpen ? "Ocultar filtros" : "Ver filtros"}
+              ${cuenta ? `<span class="dl-filter-count">${cuenta}</span>` : ""}
+              <span class="dl-chevron">⌄</span>
+            </button>
+            <button class="dl-filter-clear" type="button" data-act="limpiar-filtros-emp" ${cuenta ? "" : "disabled"}>✕ Borrar filtros</button>
+          </div>
+          ${state.filtrosEmpOpen ? `
+            <div class="dl-filter-panel">
+              ${campoEmpleado("Área", "area", areas, f.area, "dl-field--wide")}
+              ${campoEmpleado("Puesto", "puesto", puestos, f.puesto, "dl-field--wide")}
+              <label class="dl-field dl-field--wide"><span>Búsqueda</span>
+                <div class="dl-search">
+                  <span class="dl-ico">⌕</span>
+                  <input id="buscarEmpleado" data-filtro-emp="texto" value="${attr(f.texto)}" placeholder="Nombre, puesto o correo…">
+                  ${f.texto ? `<button class="dl-search-clear" type="button" data-act="limpiar-texto-emp" title="Limpiar">✕</button>` : ""}
+                </div>
+              </label>
+              <label class="dl-field dl-field--check"><span>Estado</span>
+                <span class="dl-check-box ${f.inactivos ? "is-checked" : ""}"><input type="checkbox" data-filtro-emp-check="inactivos" ${f.inactivos ? "checked" : ""}> Mostrar todos</span>
+              </label>
+            </div>` : ""}
+        </div>
+
+        <div class="dl-table-wrap">
+          <table class="dl-table">
+            <thead><tr>
+              <th>Empleado</th><th>Puesto</th><th>Área</th><th>Correo</th><th>Jefe directo</th>
+              <th>Encuestas</th><th>Respondidas</th><th>Estado</th>
+            </tr></thead>
+            <tbody>
+              ${list.length === 0 ? `<tr><td colspan="8">Ningún colaborador coincide con los filtros.</td></tr>` : list.map((persona) => `
+                <tr class="dl-row-link" data-row-open="employee-detail" data-row-arg="${esc(persona.id)}" title="Abrir el mantenimiento del empleado">
+                  <td><b>${esc(persona.name)}</b>${persona.supervisor ? ` <i>jefe de área</i>` : ""}</td>
+                  <td>${esc(persona.position)}</td>
+                  <td>${esc(persona.area)}</td>
+                  <td>${esc(persona.email)}</td>
+                  <td>${esc(persona.manager || "—")}</td>
+                  <td>${persona._asignadas || 0}</td>
+                  <td>${persona._respondidas ? `<span class="dl-badge ok">${persona._respondidas}</span>` : "0"}</td>
+                  <td><span class="dl-badge ${persona.active ? "ok" : "off"}">${persona.active ? "Activo" : "Inactivo"}</span></td>
+                </tr>`).join("")}
+            </tbody>
+          </table>
+        </div>
+        <div class="dl-table-foot"><span>${list.length} de ${state.empleados.length} colaborador(es)</span></div>
+      </section>
+
+      <section class="dl-card">
+        <div class="wk-block-head">
+          <div><b>Cómo se usa este personal en las encuestas internas</b><span>Cada encuesta interna genera una respuesta por colaborador del área evaluada; el jefe de área no se evalúa a sí mismo.</span></div>
+        </div>
+        <p class="wk-note">Para probarlo: en <b>Encuestas</b> abra una interna, ejecútela desde <b>Envíos</b> y luego entre al <a href="../portal/index.html" target="_blank">portal del colaborador</a> con el correo de cualquiera de esta lista.</p>
+      </section>`;
+  }
+
+  /* ==================================================================
+     LABORATORIO · Mantenimiento del empleado
+     ================================================================== */
+  const EMP_TABS = [
+    ["personales", "Datos personales"],
+    ["direccion", "Dirección"],
+    ["ocupacion", "Ocupación"],
+    ["marcajes", "Marcajes"],
+    ["documentacion", "Documentación"],
+    ["encuestas", "Encuestas"],
+  ];
+
+  /* Campos en modo consulta: se ven como el formulario del sistema */
+  const campoTexto = (etiqueta, valor, ancho = "") => `
+    <label class="emp-field ${ancho}"><span>${etiqueta}</span>
+      <input value="${attr(valor == null || valor === "" ? "" : valor)}" placeholder="—" readonly>
+    </label>`;
+
+  const campoLista = (etiqueta, valor, opciones, ancho = "") => `
+    <label class="emp-field ${ancho}"><span>${etiqueta}</span>
+      <select disabled>${options(opciones, valor)}</select>
+    </label>`;
+
+  function renderEmpleadoDetalle() {
+    const persona = state.empleado;
+    if (!persona) return `<p class="cargando">Cargando la ficha del colaborador…</p>`;
+
+    const cuerpo = {
+      personales: empPersonales,
+      direccion: empDireccion,
+      ocupacion: empOcupacion,
+      marcajes: empMarcajes,
+      documentacion: empDocumentacion,
+      encuestas: empEncuestas,
+    }[state.empTab](persona);
+
+    return `
+      <div class="emp-head">
+        <button class="emp-back" type="button" data-view="employees">← Regresar</button>
+        <h1>${esc(persona.name)}</h1>
+        <span class="dl-badge ${persona.active ? "ok" : "off"}">${persona.active ? "Activo" : "Inactivo"}</span>
+        <span class="emp-head-role">${esc(persona.position)} · ${esc(persona.area)}</span>
+        <button class="emp-edit" type="button" data-act="emp-editar" title="Editar">✎</button>
+      </div>
+
+      <div class="dl-tabs">
+        <div class="dl-tabs-list">
+          ${EMP_TABS.map(([id, label]) => `
+            <button class="dl-tab ${state.empTab === id ? "is-active" : ""}" type="button" data-act="emp-tab" data-arg="${id}">${label}</button>`).join("")}
+        </div>
+      </div>
+
+      ${cuerpo}`;
+  }
+
+  function empPersonales(persona) {
+    const roles = ["ADMINISTRADOR", "JEFE DE DEPARTAMENTO", "OPERADOR", "RECURSOS HUMANOS", "SUPERVISOR DE AREA"];
+    return `
+      <section class="dl-card">
+        <div class="wk-block-head"><div><b>Datos personales</b><span>Identificación y datos de contacto del colaborador.</span></div></div>
+        <div class="emp-grid">
+          ${campoTexto("Nombre *", persona.firstName)}
+          ${campoTexto("Apellido *", persona.lastName)}
+          ${campoTexto("Email *", persona.email)}
+          ${campoTexto("Contraseña (opcional)", "")}
+          ${campoTexto("Teléfono", persona.phone)}
+          ${campoTexto("NIT", persona.nit)}
+          ${campoTexto("DPI *", persona.dpi)}
+          ${campoTexto("Fecha de nacimiento", persona.birthDate)}
+          ${campoTexto("Cuenta bancaria", persona.bankAccount)}
+          ${campoTexto("Tipo de cuenta", persona.accountType)}
+          ${campoLista("Banco", persona.bankName, [persona.bankName])}
+          ${campoTexto("Avatar", "")}
+          <div class="emp-field emp-field--wide">
+            <span class="emp-check ${persona.active ? "is-on" : ""}"><input type="checkbox" ${persona.active ? "checked" : ""} disabled> Empleado activo</span>
+          </div>
+          <div class="emp-field emp-field--wide">
+            <span>Roles *</span>
+            <div class="emp-roles">
+              ${roles.map((rol) => `<span class="emp-role ${(persona.roles || []).includes(rol) ? "is-on" : ""}">${esc(rol)}</span>`).join("")}
+            </div>
+          </div>
+        </div>
+      </section>`;
+  }
+
+  function empDireccion(persona) {
+    const municipios = (DL.MUNICIPIOS || {})[persona.department] || [persona.city];
+    return `
+      <section class="dl-card">
+        <div class="wk-block-head"><div><b>Dirección</b><span>Información de domicilio del empleado.</span></div></div>
+        <div class="emp-grid">
+          ${campoTexto("Calle", persona.street, "emp-field--wide")}
+          ${campoTexto("Calle 2nda línea", persona.street2, "emp-field--wide")}
+          ${campoLista("Departamento", persona.department, DL.DEPARTAMENTOS || [persona.department])}
+          ${campoLista("Municipio", persona.city, municipios)}
+          ${campoTexto("Código postal", persona.postalCode)}
+          ${campoLista("País", persona.country, [persona.country])}
+        </div>
+      </section>`;
+  }
+
+  function empOcupacion(persona) {
+    return `
+      <section class="dl-card">
+        <div class="wk-block-head"><div><b>Asignación</b><span>Área, puesto y jefe directo dentro del laboratorio.</span></div></div>
+        <div class="emp-grid">
+          ${campoLista("Área *", persona.area, DL.AREAS_LAB || [persona.area], "emp-field--wide")}
+          ${campoLista("Puesto *", persona.position, [persona.position], "emp-field--wide")}
+          ${campoLista("Jefe directo", persona.manager || "—", [persona.manager || "—"], "emp-field--wide")}
+          ${campoTexto("Horas diarias", persona.dailyHours)}
+        </div>
+      </section>
+
+      <section class="dl-card">
+        <div class="wk-block-head"><div><b>Condiciones</b><span>Contratación y forma de pago.</span></div></div>
+        <div class="emp-grid">
+          ${campoTexto("Fecha contratación", persona.hireDate)}
+          ${campoLista("Tipo remuneración *", persona.payType, [persona.payType])}
+          <label class="emp-field"><span>Color identificativo</span>
+            <span class="emp-color"><i style="background:${attr(persona.color)}"></i><input value="${attr(persona.color)}" readonly></span>
+          </label>
+        </div>
+      </section>
+
+      <section class="dl-card">
+        <div class="wk-block-head">
+          <div><b>Fases preasignadas</b><span>Tareas que este colaborador puede tomar en producción.</span></div>
+          <span class="wk-count">${(persona.phases || []).length} fase(s)</span>
+        </div>
+        <div class="dl-table-wrap">
+          <table class="dl-table">
+            <thead><tr><th>Fase</th><th>Capacidad diaria</th><th>Estado</th></tr></thead>
+            <tbody>
+              ${(persona.phases || []).map((fase) => `
+                <tr><td><b>${esc(fase)}</b></td><td>0.00</td><td><span class="dl-badge warn">Pendiente</span></td></tr>`).join("")}
+            </tbody>
+          </table>
+        </div>
+      </section>`;
+  }
+
+  function empMarcajes(persona) {
+    return `
+      <section class="dl-card">
+        <div class="wk-block-head"><div><b>Configuración de marcajes</b><span>Define control horario y horario asignado para el empleado.</span></div></div>
+        <div class="emp-grid">
+          <div class="emp-field emp-field--wide">
+            <span class="emp-check ${persona.timeControl ? "is-on" : ""}"><input type="checkbox" ${persona.timeControl ? "checked" : ""} disabled> Activar control de horario</span>
+          </div>
+          ${campoLista("Horario asignado *", persona.schedule, [persona.schedule], "emp-field--wide")}
+          <label class="emp-field"><span>ID usuario ZKTeco</span>
+            <input value="${attr(persona.zktecoId)}" readonly>
+            <small>Este valor debe coincidir con el User ID que devuelve el reloj ZKTeco.</small>
+          </label>
+        </div>
+      </section>`;
+  }
+
+  function empDocumentacion(persona) {
+    return `
+      <section class="dl-card">
+        <div class="wk-block-head">
+          <div><b>Documentación</b><span>Expediente del colaborador.</span></div>
+          <span class="wk-count">${(persona.documents || []).filter((d) => d.state === "Cargado").length} de ${(persona.documents || []).length} completos</span>
+        </div>
+        <div class="dl-table-wrap">
+          <table class="dl-table">
+            <thead><tr><th>Documento</th><th>Estado</th><th class="dl-col-opts">Archivo</th></tr></thead>
+            <tbody>
+              ${(persona.documents || []).map((doc) => `
+                <tr>
+                  <td><b>${esc(doc.name)}</b></td>
+                  <td><span class="dl-badge ${doc.state === "Cargado" ? "ok" : "warn"}">${esc(doc.state)}</span></td>
+                  <td class="dl-col-opts">${doc.state === "Cargado" ? `<button class="dl-mini" type="button" data-act="emp-editar">Ver</button>` : "—"}</td>
+                </tr>`).join("")}
+            </tbody>
+          </table>
+        </div>
+      </section>`;
+  }
+
+  /* La razón por la que el personal vive en este prototipo */
+  function empEncuestas(persona) {
+    const list = persona._encuestas || [];
+    const hechas = list.filter((e) => e.respondida);
+    const notas = hechas.filter((e) => e.promedio !== "—").map((e) => Number(e.promedio));
+    const media = notas.length ? (notas.reduce((a, b) => a + b, 0) / notas.length).toFixed(2) : "—";
+
+    return `
+      <section class="res-cards">
+        <div class="res-card"><span>Colaborador</span><b>${esc(persona.name)}</b><i>${esc(persona.area)}</i></div>
+        <div class="res-card"><span>Asignadas</span><b>${list.length}</b></div>
+        <div class="res-card"><span>Respondidas</span><b>${hechas.length}</b></div>
+        <div class="res-card res-card--total"><span>Promedio que ha puesto</span><b>${esc(media)}</b><i>${notas.length ? "de sus respuestas" : "sin respuestas"}</i></div>
+      </section>
+
+      <section class="dl-card">
+        <div class="wk-block-head"><div><b>Encuestas internas de este colaborador</b><span>Las encuestas anónimas se muestran aquí solo como control de participación.</span></div></div>
+        <div class="dl-table-wrap">
+          <table class="dl-table">
+            <thead><tr><th>Encuesta</th><th>Período</th><th>Evalúa a</th><th>Estado</th><th>Promedio</th><th>Respondida</th></tr></thead>
+            <tbody>
+              ${list.length === 0 ? `<tr><td colspan="6">Todavía no le toca ninguna encuesta. Ejecute una interna de su área desde Encuestas → Envíos.</td></tr>` : list.map((item) => `
+                <tr>
+                  <td><b>${esc(item.surveyName)}</b></td>
+                  <td>${esc(item.period)}</td>
+                  <td>${esc(item.supervisor || "—")}</td>
+                  <td><span class="dl-badge ${item.respondida ? "ok" : "warn"}">${item.respondida ? "Respondida" : esc(item.state)}</span></td>
+                  <td>${item.promedio === "—" ? "—" : `<span class="dl-badge ${Number(item.promedio) >= 4 ? "ok" : "bad"}">★ ${esc(item.promedio)}</span>`}</td>
+                  <td>${esc(item.finishedAt || "—")}</td>
+                </tr>`).join("")}
+            </tbody>
+          </table>
+        </div>
+      </section>`;
+  }
+
+  function campoEmpleado(etiqueta, campo, opciones, valor, ancho = "") {
+    return `
+      <label class="dl-field ${ancho}"><span>${etiqueta}</span>
+        <select data-filtro-emp="${campo}">
+          <option value="">- ${campo === "area" ? "Todas" : "Todos"} -</option>
+          ${opciones.map((opcion) => `<option ${String(opcion) === String(valor) ? "selected" : ""}>${esc(opcion)}</option>`).join("")}
+        </select>
+      </label>`;
+  }
+
+  /* ==================================================================
+     ENCUESTAS · Resultados (histórico del sistema anterior + motor nuevo)
+     ================================================================== */
+  const claseEscala = (texto) =>
+    texto === "Excelente" ? "ok" : texto === "Bueno" ? "" : texto === "Regular" ? "warn" : "off";
+
+  function renderResultadosLista() {
+    const list = state.resultados;
+    const delMotor = list.filter((r) => r.origen === "Motor de encuestas").length;
+
+    return `
+      <div class="dl-tabs">
+        <div class="dl-tabs-list">
+          <button class="dl-tab is-active" type="button">Resultados de encuestas (${list.length})</button>
+        </div>
+        <div class="dl-tabs-actions">
+          <button class="dl-tab-action" type="button" data-view="survey-list">▧ Encuestas</button>
+        </div>
+      </div>
+
+      <div class="dercas-ribbon">
+        <div><b>Períodos evaluados</b><span>Los resultados que ya venían del sistema anterior y los que va generando este motor, en una sola tabla.</span></div>
+        <div class="ribbon-tags"><span class="badge neutral">${list.length - delMotor} del sistema anterior</span><span class="badge pink">${delMotor} de este motor</span></div>
+      </div>
+
+      <section class="dl-card">
+        <div class="dl-table-wrap">
+          <table class="dl-table">
+            <thead><tr>
+              <th>Encuesta</th><th>Supervisor</th><th>Período</th><th>Área</th>
+              <th>Asignadas</th><th>Respuestas</th><th>Promedio</th><th>Origen</th><th class="dl-col-opts">Acción</th>
+            </tr></thead>
+            <tbody>
+              ${list.length === 0 ? `<tr><td colspan="9">Todavía no hay períodos evaluados.</td></tr>` : list.map((r) => `
+                <tr class="dl-row-link" data-row-open="result-detail" data-row-arg="${esc(r.id)}" title="Ver el detalle">
+                  <td><b>${esc(r.surveyName)}</b></td>
+                  <td>${esc(r.supervisor || "—")}</td>
+                  <td>${esc(r.periodLabel)}</td>
+                  <td>${esc(r.area)}</td>
+                  <td><span class="dl-badge">${r.asignadas}</span></td>
+                  <td><span class="dl-badge ${r.respuestas ? "ok" : "off"}">${r.respuestas}</span></td>
+                  <td><b class="${r.escala === "Regular" ? "wk-bad" : "wk-good"}">${esc(r.promedio)}</b> <i>${esc(r.escala)}</i></td>
+                  <td><span class="dl-badge ${r.origen === "Motor de encuestas" ? "pink" : "off"}">${esc(r.origen)}</span></td>
+                  <td class="dl-col-opts"><button class="dl-mini" type="button" data-act="result-detail" data-arg="${esc(r.id)}">◎ Ver detalle</button></td>
+                </tr>`).join("")}
+            </tbody>
+          </table>
+        </div>
+        <div class="dl-table-foot"><span>${list.length} registro(s)</span></div>
+      </section>`;
+  }
+
+  function renderResultadoDetalle() {
+    const r = state.resultado;
+    if (!r) return `<p class="cargando">Cargando el detalle…</p>`;
+
+    return `
+      <div class="dl-tabs">
+        <div class="dl-tabs-list">
+          <button class="dl-tab is-active" type="button">Detalle</button>
+        </div>
+        <div class="dl-tabs-actions">
+          <button class="dl-tab-action" type="button" data-view="results-list">← Regresar</button>
+        </div>
+      </div>
+
+      <section class="res-cards">
+        <div class="res-card"><span>Supervisor evaluado</span><b>${esc(r.supervisor || "—")}</b></div>
+        <div class="res-card"><span>Asignados</span><b>${r.asignadas}</b></div>
+        <div class="res-card"><span>Respondieron</span><b>${r.respuestas}</b></div>
+        <div class="res-card res-card--total"><span>Resultado total</span><b>${esc(r.promedio)}</b><i>${esc(r.escala)}</i></div>
+      </section>
+
+      <section class="dl-card">
+        <div class="wk-block-head">
+          <div><b>${esc(r.surveyName)}</b><span>${esc(r.periodLabel)} · ${esc(r.area)} · ${esc(r.origen)}</span></div>
+          <span class="dl-badge ${r.origen === "Motor de encuestas" ? "pink" : "off"}">${esc(r.origen)}</span>
+        </div>
+        <div class="dl-table-wrap">
+          <table class="dl-table">
+            <thead><tr><th>Colaborador</th><th>Puesto</th><th>Correo</th><th>Estado</th><th>Promedio</th><th>Respuestas</th></tr></thead>
+            <tbody>
+              ${(r.colaboradores || []).map((c) => `
+                <tr>
+                  <td><b>${esc(c.name)}</b></td>
+                  <td>${esc(c.position || "—")}</td>
+                  <td>${esc(c.email || "—")}</td>
+                  <td><span class="dl-badge ${c.estado === "Respondida" ? "ok" : "warn"}">${esc(c.estado)}</span></td>
+                  <td>${c.promedio === "—" ? "—" : `<span class="dl-badge ${Number(c.promedio) >= 4 ? "ok" : "bad"}">★ ${esc(c.promedio)}</span>`}</td>
+                  <td>${c.respuestas}</td>
+                </tr>`).join("")}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="dl-card">
+        <div class="wk-block-head"><div><b>Promedio por pregunta</b><span>Así respondió el equipo cada punto de la encuesta.</span></div></div>
+        <div class="dl-table-wrap">
+          <table class="dl-table">
+            <thead><tr><th>Pregunta</th><th>Promedio</th><th>Respuestas</th></tr></thead>
+            <tbody>
+              ${(r.preguntas || []).map((q, i) => `
+                <tr>
+                  <td class="wk-comment"><b>${i + 1}.</b> ${esc(q.texto)}</td>
+                  <td><b class="${Number(q.promedio) < 4 ? "wk-bad" : "wk-good"}">${esc(q.promedio)}</b></td>
+                  <td>${q.respuestas}</td>
+                </tr>`).join("")}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      ${(r.comentarios || []).length ? `
+        <section class="dl-card">
+          <div class="wk-block-head"><div><b>Comentarios generales</b><span>Tal como los escribió el personal. Las encuestas internas son anónimas.</span></div></div>
+          <div class="res-comments">
+            ${r.comentarios.map((texto, i) => `<div class="res-comment"><span>COMENTARIO ${i + 1}</span><p>${esc(texto)}</p></div>`).join("")}
+          </div>
+        </section>` : ""}`;
+  }
+
+  /* ---------------- Ficha del trabajo (los mismos datos del sistema) ---------------- */
   function renderWorkDetail() {
     const work = selectedWork();
     const eligible = ["enviado", "facturado"].includes(work.status);
     const mismos = DL.worksByDoctor(work.doctor, ["enviado", "facturado"]);
+    const dato = (etiqueta, valor) => `<div class="wk-item"><span>${etiqueta}</span><b>${esc(valor || "—")}</b></div>`;
+
     return `
-      <div class="work-detail-head">
-        <div><span class="muted">Código trabajo</span><h1>${esc(work.code)}</h1><b>Asesora</b> ${esc(work.advisor)}</div>
-        <div class="head-actions">
-          <button class="btn" type="button" data-view="work-list">← Regresar</button>
-          <button class="btn ${eligible ? "primary" : ""}" type="button" data-act="survey-from-work" data-arg="${esc(work.id)}" ${eligible ? "" : "disabled"}>${eligible ? "Crear encuesta para este doctor" : "No elegible"}</button>
+      <div class="dl-tabs">
+        <div class="dl-tabs-list">
+          <button class="dl-tab is-active" type="button">Resumen</button>
+          <button class="dl-tab" type="button" data-act="work-findings">Hallazgos</button>
+        </div>
+        <div class="dl-tabs-actions">
+          <button class="dl-tab-action" type="button" data-act="survey-from-work" data-arg="${esc(work.id)}" ${eligible ? "" : "disabled"}>✚ Encuesta del doctor</button>
+          <button class="dl-tab-action" type="button" data-view="work-list">Volver</button>
         </div>
       </div>
-      <section class="page-card">
-        <div class="detail-grid">
-          <div class="detail-item"><span>Cliente</span><b>${esc(work.clinic)}</b></div>
-          <div class="detail-item"><span>Doctor/a</span><b>${esc(work.doctor)}</b></div>
-          <div class="detail-item"><span>Paciente</span><b>${esc(work.patient)}</b></div>
-          <div class="detail-item"><span>Producto</span><b>${esc(work.product)}</b></div>
-          <div class="detail-item"><span>Fecha estado Enviado</span><b>${esc(work.sent)}</b></div>
-          <div class="detail-item"><span>Asesora asociada</span><b>${esc(work.advisor)}</b></div>
+
+      <section class="wk-head">
+        <div class="wk-head-main">
+          <div><span>Código trabajo</span><h1>${esc(work.code)}</h1></div>
+          <div><span>Técnico ingreso</span><b>${esc(work.technician)}</b></div>
+          ${puntuacionTrabajo()}
+        </div>
+        <span class="wk-status">${esc(work.status)} ⌄</span>
+      </section>
+
+      <section class="wk-panel">
+        ${dato("Cliente", work.clinic)}
+        ${dato("Centro", work.center)}
+        ${dato("Doctor/a", work.doctor)}
+        ${dato("Paciente", work.patient)}
+        ${dato("Edad/Sexo", `${work.age}/${work.sex}`)}
+        ${dato("Caja", work.box)}
+        ${dato("Fecha de creación", work.createdAt)}
+        ${dato("Fecha de aceptación", work.acceptedAt)}
+        ${dato("Fecha de finalización", work.finishedAt)}
+        ${dato("Fecha de envío", work.sent)}
+        ${dato("Fecha de pedido", work.orderedAt)}
+        ${dato("Fecha límite", work.dueAt)}
+        ${dato("Entrega estimada", work.estimatedAt)}
+        ${dato("Fecha de albarán", work.albaranAt)}
+        ${dato("Total", work.total)}
+        ${dato("Total con IVA", work.totalIVA)}
+      </section>
+
+      <section class="dl-card">
+        <div class="wk-block-head"><div><b>Etiquetas de trabajo</b><span>Etiquetas asignadas a la orden en el sistema externo.</span></div></div>
+        <div class="wk-tags">${(work.tags || []).map((tag, i) => `<span class="wk-tag"><i>${i + 2}</i> ${esc(tag)}</span>`).join("") || `<span class="dl-muted">Sin etiquetas.</span>`}</div>
+      </section>
+
+      <section class="dl-card">
+        <div class="wk-block-head">
+          <div><b>Productos</b><span>Líneas de producto/concepto de la orden.</span></div>
+          <span class="wk-count">${(work.products || []).length} línea(s)</span>
+        </div>
+        <div class="dl-table-wrap">
+          <table class="dl-table">
+            <thead><tr><th>#</th><th>Producto/Concepto</th><th>Unidades</th><th>Dientes</th><th>Precio</th><th>Dto. (%)</th><th>Precio/Un.</th><th>Total</th><th>IVA</th></tr></thead>
+            <tbody>
+              ${(work.products || []).map((item) => `
+                <tr>
+                  <td>${item.line}</td>
+                  <td><b>${esc(item.code)} - ${esc(item.name)}</b> <i>${esc(item.ref)}</i></td>
+                  <td>${item.units}</td><td>${item.teeth}</td><td>${esc(item.price)}</td>
+                  <td>${esc(item.discount)}</td><td>${esc(item.unitPrice)}</td><td>${esc(item.total)}</td><td>${esc(item.iva)}</td>
+                </tr>`).join("")}
+              <tr class="wk-total"><td></td><td>Total</td><td>${(work.products || []).reduce((t, i) => t + i.units, 0)}</td><td colspan="5"></td><td>${esc(work.total)}</td></tr>
+              <tr class="wk-total"><td colspan="7"></td><td>Total con IVA</td><td>${esc(work.totalIVA)}</td></tr>
+            </tbody>
+          </table>
         </div>
       </section>
-      <section class="detail-section">
-        <h3>Órdenes del mismo doctor en el período</h3>
-        <div class="table-wrap">
-          <table class="data-table">
-            <thead><tr><th>Orden</th><th>Paciente</th><th>Producto</th><th>Enviado</th><th>Asesora</th></tr></thead>
-            <tbody>${mismos.map((item) => `<tr><td>${esc(item.code)}</td><td>${esc(item.patient)}</td><td>${esc(item.product)}</td><td>${esc(item.sent)}</td><td>${esc(item.advisor)}</td></tr>`).join("")}</tbody>
+
+      <section class="dl-card">
+        <div class="wk-block-head">
+          <div><b>Fases de la orden</b><span>Tareas registradas en el sistema externo, en orden de ejecución.</span></div>
+          <span class="wk-count">${(work.phases || []).length} fase(s)</span>
+        </div>
+        <div class="dl-table-wrap">
+          <table class="dl-table">
+            <thead><tr><th>#</th><th>Fase</th><th>Responsable</th><th>Estado</th><th>Inicio</th><th>Fin</th><th>Entrega est.</th><th>Dientes</th><th>Coste</th><th>Comisión</th><th>Tiempo</th></tr></thead>
+            <tbody>
+              ${(work.phases || []).map((fase) => `
+                <tr>
+                  <td>${fase.line}</td>
+                  <td>${esc(fase.name)}</td>
+                  <td><b>${esc(fase.responsible)}</b> <i>${esc(fase.role)}</i></td>
+                  <td><span class="dl-badge ${fase.state === "terminada" ? "ok" : "warn"}">${esc(fase.state)}</span></td>
+                  <td>${esc(fase.start)}</td><td>${esc(fase.end)}</td><td>${esc(fase.estimated)}</td>
+                  <td>${fase.teeth}</td><td>${esc(fase.cost)}</td><td>${esc(fase.commission)}</td><td>${esc(fase.time)}</td>
+                </tr>`).join("")}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="wk-notes">
+        <div class="dl-card">
+          <div class="wk-block-head"><div><b>Observaciones</b><span>Indicaciones enviadas por la clínica.</span></div></div>
+          <p class="wk-note">${esc(work.observations)}</p>
+        </div>
+        <div class="dl-card">
+          <div class="wk-block-head"><div><b>Notas internas</b><span>Notas visibles solo para el laboratorio.</span></div></div>
+          <p class="wk-note">${esc(work.internalNotes)}</p>
+        </div>
+      </section>
+
+      ${bloqueEncuestaTrabajo(work)}
+
+      <section class="dl-card">
+        <div class="wk-block-head"><div><b>Órdenes del mismo doctor en el período</b><span>Son las que entrarían en la encuesta de ${esc(work.doctor)}.</span></div><span class="wk-count">${mismos.length} orden(es)</span></div>
+        <div class="dl-table-wrap">
+          <table class="dl-table">
+            <thead><tr><th>Orden</th><th>Paciente</th><th>Producto</th><th>Envío</th><th>Asesora</th></tr></thead>
+            <tbody>${mismos.map((item) => `<tr><td><b>${esc(item.code)}</b></td><td>${esc(item.patient)}</td><td>${esc(item.product)}</td><td>${esc(item.sent)}</td><td>${esc(item.advisor)}</td></tr>`).join("")}</tbody>
           </table>
         </div>
       </section>`;

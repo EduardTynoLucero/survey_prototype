@@ -23,6 +23,7 @@ function cargar() {
       datos.encuestas = datos.encuestas || [];
       datos.instancias = datos.instancias || [];
       datos.mensajes = datos.mensajes || [];
+      migrarDemo();
       return datos;
     }
   } catch (error) {
@@ -31,6 +32,37 @@ function cargar() {
   datos = inicial();
   guardar();
   return datos;
+}
+
+/* Refresca solo las encuestas de demostración cuando cambia el
+   catálogo (nuevas preguntas, nuevos textos). Lo que el usuario haya
+   creado o editado no se toca. */
+function migrarDemo() {
+  const actuales = catalogo.semilla();
+  let cambios = 0;
+
+  actuales.forEach((nueva) => {
+    const indice = datos.encuestas.findIndex((e) => e.id === nueva.id);
+    if (indice < 0) {
+      datos.encuestas.push(nueva);
+      cambios += 1;
+      return;
+    }
+    const vieja = datos.encuestas[indice];
+    if (Number(vieja.seedVersion || 0) >= Number(nueva.seedVersion || 0)) return;
+
+    /* Se conserva el estado que tenía y se sueltan sus envíos viejos,
+       porque las preguntas cambiaron. */
+    nueva.status = vieja.status;
+    datos.encuestas[indice] = nueva;
+    datos.instancias = datos.instancias.filter((i) => i.surveyId !== nueva.id);
+    cambios += 1;
+  });
+
+  if (cambios) {
+    console.log(`[db] ${cambios} encuesta(s) de demostración actualizadas al catálogo nuevo`);
+    guardar();
+  }
 }
 
 function guardar() {
