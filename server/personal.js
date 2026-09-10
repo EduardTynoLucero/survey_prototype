@@ -264,8 +264,9 @@ EMPLEADOS.forEach((persona) => {
   }
 });
 
-/* El desarrollador no responde encuestas de área */
-const SIN_ENCUESTA = ["bryan@digitallabsgt.com"];
+/* Nadie queda fuera: quien administra el módulo también responde
+   la encuesta de su área (solo los jefes no se evalúan a sí mismos). */
+const SIN_ENCUESTA = [];
 
 const listar = () => EMPLEADOS;
 const obtener = (id) => EMPLEADOS.find((e) => e.id === id) || null;

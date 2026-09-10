@@ -2019,3 +2019,1230 @@ code {
 .edit-shell .ventana-fila input {
   min-height: 28px;
 }
+
+/* ===================================================================
+   Bandeja de encuestas dentro del módulo
+   =================================================================== */
+.dl-tab .dl-pend {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  margin-left: 5px;
+  padding: 0 4px;
+  border-radius: 2px;
+  background: var(--ui-primary);
+  color: #fff;
+  font-size: 9.5px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.bandeja-responder {
+  max-width: 560px;
+  margin: 0 auto;
+}
+
+.bandeja-nota {
+  margin: 10px 2px 0;
+  text-align: center;
+  line-height: 1.5;
+}
+
+/* ===================================================================
+   Editor con tabs: Detalle · Respuestas · Envíos
+   =================================================================== */
+/* Barra del editor: primero los tabs, al final la clasificación y el nombre */
+.toolbar-strip.editor-top {
+  min-height: 34px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  background: linear-gradient(180deg, #fff 0%, #fcfafb 100%);
+}
+
+.editor-tabs {
+  display: flex;
+  align-items: stretch;
+  margin: 0;
+  background: transparent;
+}
+
+.editor-tab {
+  height: 33px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--ui-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .02em;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color .12s ease, border-color .12s ease;
+}
+
+.editor-tab > i {
+  min-width: 15px;
+  height: 15px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--ui-border-soft);
+  color: var(--ui-muted);
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.editor-tab:hover {
+  color: var(--ui-primary-dark);
+}
+
+.editor-tab.is-active {
+  border-bottom-color: var(--ui-primary);
+  color: var(--ui-primary-dark);
+}
+
+.editor-tab.is-active > i {
+  background: var(--ui-primary);
+  color: #fff;
+}
+
+.editor-acciones {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+}
+
+.editor-id {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 34%;
+  padding-left: 9px;
+  border-left: 1px solid var(--ui-border-soft);
+}
+
+.editor-id .badge {
+  flex: 0 0 auto;
+}
+
+.editor-id-txt {
+  min-width: 0;
+  display: grid;
+  line-height: 1.15;
+  text-align: right;
+}
+
+.editor-id-txt b {
+  overflow: hidden;
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editor-id-txt small {
+  color: var(--ui-muted);
+  font-size: 9.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+}
+
+.editor-modo {
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 7px;
+  border: 1px solid var(--ui-primary);
+  border-radius: 2px;
+  background: var(--ui-primary-soft);
+  color: var(--ui-primary-dark);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+
+/* Modo consulta: se ve, no se toca */
+.modo-consulta .edit-body input:disabled,
+.modo-consulta .edit-body select:disabled,
+.modo-consulta .edit-body textarea:disabled {
+  background: #fbfbfc;
+  color: var(--ui-text);
+  opacity: 1;
+  cursor: default;
+}
+
+.modo-consulta .edit-body button:disabled {
+  opacity: .4;
+  cursor: not-allowed;
+}
+
+.modo-consulta .wizard-step button {
+  cursor: pointer;
+}
+
+/* ===================================================================
+   Editor fino y compacto
+   Campos cortos (no de lado a lado), tipografía menor y menos aire.
+   Todo va dentro de .edit-shell para no tocar las demás pantallas.
+   =================================================================== */
+.edit-shell {
+  gap: 8px;
+}
+
+/* ---------- Pasos: control segmentado, no cinco tarjetones ---------- */
+.edit-shell .wizard-steps {
+  grid-template-columns: repeat(5, minmax(0, auto));
+  justify-content: start;
+  gap: 0;
+  margin: 0;
+  border: 1px solid var(--ui-border);
+  border-radius: 2px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.edit-shell .wizard-step button {
+  gap: 6px;
+  height: 27px;
+  padding: 0 12px;
+  border: 0;
+  border-right: 1px solid var(--ui-border-soft);
+  border-radius: 0;
+  background: #fff;
+}
+
+.edit-shell .wizard-step:last-child button {
+  border-right: 0;
+}
+
+.edit-shell .wizard-step button:hover {
+  background: var(--ui-hover);
+}
+
+.edit-shell .wizard-step.active button {
+  background: var(--ui-primary-soft);
+  box-shadow: inset 0 -2px 0 var(--ui-primary);
+}
+
+.edit-shell .wizard-step .step-num {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 15px;
+  border-radius: 2px;
+  font-size: 9px;
+}
+
+.edit-shell .wizard-step .step-text b {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .02em;
+  white-space: nowrap;
+}
+
+.edit-shell .wizard-step.active .step-text b {
+  color: var(--ui-primary-dark);
+}
+
+/* ---------- Tarjetas del paso ---------- */
+.edit-shell .page-card {
+  margin-bottom: 8px;
+  border-radius: 2px;
+}
+
+.edit-shell .card-title {
+  padding: 0 10px;
+  min-height: 26px;
+  gap: 7px;
+  background: var(--ui-toolbar);
+  border-bottom: 1px solid var(--ui-border);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .03em;
+  text-transform: uppercase;
+}
+
+.edit-shell .card-title .pink-icon {
+  width: 13px;
+  height: 13px;
+  font-size: 14px;
+}
+
+.edit-shell .card-title small {
+  font-size: 10px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* ---------- Formularios: columnas cortas y fijas ---------- */
+.edit-shell .form-grid {
+  grid-template-columns: repeat(2, minmax(0, 300px));
+  justify-content: start;
+  gap: 8px 12px;
+  padding: 10px;
+}
+
+.edit-shell .form-grid.g4 {
+  grid-template-columns: repeat(4, minmax(0, 144px));
+}
+
+.edit-shell .field {
+  gap: 2px;
+}
+
+.edit-shell .field > span {
+  color: var(--ui-muted);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: .04em;
+}
+
+.edit-shell .field > span small {
+  display: block;
+  color: var(--ui-muted);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.edit-shell .field input,
+.edit-shell .field select,
+.edit-shell .field textarea,
+.edit-shell .ventana-fila input {
+  min-height: 24px;
+  padding: 3px 6px;
+  border: 1px solid var(--ui-input-border);
+  border-radius: 2px;
+  font-size: 11px;
+}
+
+.edit-shell .field input:focus,
+.edit-shell .field select:focus,
+.edit-shell .field textarea:focus {
+  border-color: var(--ui-primary);
+  outline: 0;
+}
+
+.edit-shell .field input[readonly] {
+  background: #fafafb;
+  color: var(--ui-muted);
+}
+
+.edit-shell .field textarea {
+  min-height: 46px;
+  line-height: 1.4;
+}
+
+.edit-shell .field > small {
+  color: var(--ui-muted);
+  font-size: 9.5px;
+  line-height: 1.35;
+}
+
+/* fecha + hora en una sola línea corta */
+.edit-shell .ventana-fila {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 96px;
+  gap: 5px;
+}
+
+.edit-shell .switch-row,
+.edit-shell .check-row {
+  gap: 6px;
+  font-size: 11px;
+}
+
+.edit-shell .switch-row input,
+.edit-shell .check-row input {
+  width: 13px;
+  height: 13px;
+}
+
+.edit-shell .tiny,
+.edit-shell .hint-line,
+.edit-shell .empty-note,
+.edit-shell .ready-note {
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.edit-shell .tiny {
+  padding: 0 10px 8px;
+}
+
+/* ---------- Botonera de guardado ---------- */
+.edit-shell .form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px;
+  background: #fff;
+  border: 1px solid var(--ui-border);
+  border-radius: 2px;
+}
+
+/* ---------- Período, agenda y WhatsApp ---------- */
+.edit-shell .periodo-box,
+.edit-shell .agenda-test,
+.edit-shell .whatsapp-preview,
+.edit-shell .asig-box {
+  margin: 0 10px 10px;
+  border-radius: 2px;
+}
+
+.edit-shell .agenda-test {
+  padding: 8px 10px;
+  gap: 8px;
+}
+
+.edit-shell .agenda-test b {
+  font-size: 11px;
+}
+
+.edit-shell .agenda-test span {
+  font-size: 10px;
+}
+
+.edit-shell .agenda-test input[type="number"] {
+  min-height: 24px;
+  border-radius: 2px;
+  font-size: 11px;
+}
+
+.edit-shell .load-actions .btn {
+  min-height: 24px;
+  padding: 0 9px;
+  border-radius: 2px;
+  font-size: 10.5px;
+}
+
+/* ---------- Público interno / externo ---------- */
+.edit-shell .doctor-head {
+  padding: 5px 8px;
+}
+
+.edit-shell .doctor-head b {
+  font-size: 11px;
+}
+
+.edit-shell .doctor-head small {
+  font-size: 9.5px;
+}
+
+.edit-shell .doctor-item,
+.edit-shell .work-item,
+.edit-shell .feature-toggle {
+  border-radius: 2px;
+}
+
+.edit-shell .work-item {
+  min-height: 30px;
+  padding: 4px 8px;
+  font-size: 11px;
+}
+
+.edit-shell .doctor-works {
+  padding: 3px 8px 8px 26px;
+}
+
+.edit-shell .feature-toggle {
+  margin: 10px;
+  padding: 8px 10px;
+}
+
+.edit-shell .feature-toggle b {
+  font-size: 11px;
+}
+
+.edit-shell .feature-toggle small {
+  font-size: 10px;
+}
+
+.edit-shell .mode-check-grid {
+  gap: 6px;
+}
+
+.edit-shell .mode-check {
+  padding: 6px 8px;
+  border-radius: 2px;
+  font-size: 10.5px;
+}
+
+/* ---------- Revisión ---------- */
+.edit-shell .publish-check {
+  gap: 4px;
+  padding: 10px;
+}
+
+.edit-shell .publish-check > div {
+  min-height: 24px;
+  padding: 0 8px;
+  border-radius: 2px;
+  font-size: 10.5px;
+}
+
+.edit-shell .review-grid {
+  gap: 6px;
+  padding: 10px;
+}
+
+.edit-shell .review-grid > div {
+  padding: 6px 8px;
+  border-radius: 2px;
+}
+
+.edit-shell .review-grid span {
+  font-size: 9.5px;
+}
+
+.edit-shell .review-grid b {
+  font-size: 11px;
+}
+
+/* ===================================================================
+   Editor de preguntas: mismo Google Forms, en versión compacta
+   =================================================================== */
+.edit-shell .forms-board {
+  border-radius: 2px;
+}
+
+.edit-shell .forms-top {
+  min-height: 34px;
+  padding: 4px 10px;
+  gap: 8px;
+}
+
+.edit-shell .forms-mark {
+  width: 20px;
+  grid-template-columns: repeat(2, 6px);
+  gap: 2px;
+}
+
+.edit-shell .forms-mark span {
+  width: 6px;
+  height: 6px;
+}
+
+.edit-shell .form-name-input {
+  min-height: 26px;
+  padding: 0 6px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.edit-shell .save-state {
+  font-size: 9.5px;
+}
+
+.edit-shell .forms-dercas-strip {
+  min-height: 26px;
+  padding: 3px 10px;
+  gap: 10px;
+  font-size: 10px;
+}
+
+.edit-shell .editor-layout {
+  grid-template-columns: 186px minmax(0, 1fr);
+  gap: 8px;
+  padding: 8px;
+}
+
+.edit-shell .outline-rail {
+  gap: 3px;
+  padding: 6px;
+  border-radius: 2px;
+}
+
+.edit-shell .outline-head {
+  font-size: 9px;
+}
+
+.edit-shell .outline-sec-btn {
+  padding: 3px 5px;
+}
+
+.edit-shell .outline-sec-btn b {
+  font-size: 10.5px;
+}
+
+.edit-shell .outline-sec-btn small,
+.edit-shell .outline-q {
+  font-size: 9.5px;
+}
+
+.edit-shell .outline-q {
+  min-height: 20px;
+  padding: 0 6px;
+}
+
+.edit-shell .forms-canvas {
+  width: 100%;
+  padding: 0;
+}
+
+.edit-shell .section-stack {
+  gap: 12px;
+}
+
+.edit-shell .forms-card {
+  border-radius: 3px;
+  box-shadow: none;
+}
+
+.edit-shell .section-badge {
+  min-height: 24px;
+  padding: 0 10px;
+  gap: 10px;
+  border-radius: 3px 3px 0 0;
+  font-size: 10px;
+  letter-spacing: .03em;
+}
+
+.edit-shell .section-head-card {
+  padding: 9px 12px 10px;
+  border-top-width: 4px;
+}
+
+.edit-shell .section-title-input {
+  padding-bottom: 4px;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.edit-shell .section-description-input {
+  min-height: 22px;
+  margin-top: 6px;
+  padding-bottom: 4px;
+  font-size: 11px;
+}
+
+.edit-shell .section-meta-row {
+  margin-top: 7px;
+  padding-top: 6px;
+  font-size: 9.5px;
+}
+
+.edit-shell .section-behavior {
+  padding: 9px 12px;
+  gap: 8px;
+}
+
+.edit-shell .section-behavior b {
+  font-size: 11px;
+}
+
+.edit-shell .section-behavior span {
+  font-size: 10px;
+}
+
+.edit-shell .section-route {
+  min-height: 30px;
+  padding: 5px 10px;
+  gap: 8px;
+  font-size: 10px;
+}
+
+.edit-shell .section-route select {
+  min-height: 24px;
+  max-width: 210px;
+  border-radius: 2px;
+  font-size: 10.5px;
+}
+
+/* Preguntas contraídas: una línea */
+.edit-shell .question-card {
+  gap: 9px;
+  margin-top: 7px;
+  padding: 10px 12px 8px;
+}
+
+.edit-shell .question-card.active {
+  border-left-width: 3px;
+  padding-left: 10px;
+}
+
+.edit-shell .question-card.collapsed {
+  padding: 0;
+}
+
+.edit-shell .q-summary {
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 4px 10px;
+}
+
+.edit-shell .q-index {
+  width: 17px;
+  height: 17px;
+  border-radius: 2px;
+  font-size: 9px;
+}
+
+.edit-shell .q-summary b {
+  font-size: 11px;
+}
+
+.edit-shell .q-summary small {
+  font-size: 9.5px;
+}
+
+/* Pregunta abierta */
+.edit-shell .question-grid {
+  grid-template-columns: minmax(0, 1fr) 160px;
+  gap: 8px;
+}
+
+.edit-shell .question-title-input {
+  min-height: 26px;
+  padding: 3px 0;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.edit-shell .question-type,
+.edit-shell .option-input {
+  min-height: 26px;
+  height: 26px;
+  padding: 0 6px;
+  border-radius: 2px;
+  font-size: 11px;
+}
+
+.edit-shell .question-help-input {
+  margin: 0;
+  padding: 3px 0;
+  font-size: 10.5px;
+}
+
+.edit-shell .answer-preview {
+  gap: 5px;
+}
+
+.edit-shell .option-row {
+  grid-template-columns: 14px minmax(0, 1fr) 20px;
+  gap: 6px;
+}
+
+.edit-shell .radio-dot,
+.edit-shell .check-dot {
+  width: 13px;
+  height: 13px;
+  border-width: 1px;
+}
+
+.edit-shell .remove-option {
+  font-size: 15px;
+}
+
+.edit-shell .add-option {
+  padding: 0;
+  font-size: 10.5px;
+  text-align: left;
+}
+
+.edit-shell .stars-line {
+  font-size: 15px;
+  gap: 2px;
+}
+
+.edit-shell .stars-line small {
+  font-size: 10px;
+}
+
+.edit-shell .short-placeholder,
+.edit-shell .paragraph-placeholder {
+  font-size: 10.5px;
+}
+
+/* Reglas de la pregunta */
+.edit-shell .motor-panel {
+  gap: 8px;
+  padding: 9px 10px;
+  border-radius: 2px;
+}
+
+.edit-shell .motor-panel h3 {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.edit-shell .motor-grid {
+  grid-template-columns: repeat(2, minmax(0, 240px));
+  justify-content: start;
+  gap: 8px 12px;
+}
+
+.edit-shell .motor-grid .field input,
+.edit-shell .motor-grid .field select {
+  min-height: 24px;
+  font-size: 11px;
+}
+
+.edit-shell .star-rule-grid {
+  grid-column: 1 / -1;
+  gap: 8px;
+}
+
+.edit-shell .rule-box {
+  padding: 8px 10px;
+  border-radius: 2px;
+  gap: 6px;
+}
+
+.edit-shell .rule-box header b {
+  font-size: 10.5px;
+}
+
+.edit-shell .rule-box header span {
+  font-size: 9.5px;
+}
+
+.edit-shell .rule-box .field input,
+.edit-shell .rule-box .field select {
+  min-height: 24px;
+  font-size: 11px;
+}
+
+.edit-shell .chip-editor {
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.edit-shell .chip-editor > span {
+  font-size: 9px;
+}
+
+.edit-shell .chip-item {
+  padding: 1px 5px;
+  border-radius: 2px;
+  font-size: 9.5px;
+}
+
+.edit-shell .chip-add input {
+  min-height: 24px;
+  border-radius: 2px;
+  font-size: 10.5px;
+}
+
+.edit-shell .question-footer {
+  gap: 5px;
+  padding-top: 6px;
+}
+
+.edit-shell .question-footer .text-btn,
+.edit-shell .section-badge .text-btn {
+  min-height: 22px;
+  padding: 0 7px;
+  border-radius: 2px;
+  font-size: 10px;
+}
+
+.edit-shell .question-footer .switch-row {
+  font-size: 10px;
+}
+
+@media (max-width: 1180px) {
+  .edit-shell .editor-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .edit-shell .outline-rail {
+    position: static;
+    max-height: 170px;
+  }
+}
+
+@media (max-width: 900px) {
+  .edit-shell .form-grid,
+  .edit-shell .form-grid.g4,
+  .edit-shell .motor-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .edit-shell .wizard-steps {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+
+  .editor-id {
+    max-width: 100%;
+  }
+}
+
+/* ---------- Ajustes finos: alturas iguales y selects que no se aplastan ---------- */
+.edit-shell .field input,
+.edit-shell .field select,
+.edit-shell .ventana-fila input,
+.edit-shell .motor-grid .field select,
+.edit-shell .rule-box .field select {
+  height: 25px;
+}
+
+.edit-shell .field textarea {
+  height: auto;
+}
+
+.edit-shell .field input[type="date"],
+.edit-shell .field input[type="time"] {
+  padding-right: 3px;
+}
+
+.edit-shell .field.inline {
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.edit-shell .field.inline > span {
+  font-size: 9.5px;
+}
+
+.edit-shell .field.inline > select {
+  flex: 0 0 108px;
+  width: 108px;
+}
+
+.edit-shell .wizard-steps {
+  width: max-content;
+  max-width: 100%;
+}
+
+.edit-shell .periodo-head b {
+  font-size: 11px;
+}
+
+.edit-shell .periodo-head span,
+.edit-shell .periodo-auto {
+  font-size: 10px;
+}
+
+.edit-shell .whatsapp-preview b {
+  font-size: 10px;
+}
+
+.edit-shell .whatsapp-preview p {
+  font-size: 10.5px;
+}
+
+/* ---------- Que nada se desborde de su columna ---------- */
+.edit-shell .star-rule-grid,
+.edit-shell .motor-grid,
+.edit-shell .question-grid,
+.edit-shell .form-grid {
+  min-width: 0;
+}
+
+.edit-shell .rule-box {
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  gap: 7px;
+  border-top-width: 3px;
+}
+
+.edit-shell .rule-box > *,
+.edit-shell .motor-grid > .field,
+.edit-shell .form-grid > .field {
+  min-width: 0;
+}
+
+.edit-shell .rule-box header {
+  padding-bottom: 5px;
+}
+
+.edit-shell .rule-box header span {
+  padding: 2px 5px;
+  border-radius: 2px;
+  font-size: 9px;
+}
+
+.edit-shell .field.inline {
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.edit-shell .chip-list,
+.edit-shell .chip-add {
+  min-width: 0;
+}
+
+.edit-shell .chip-add {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 26px;
+  gap: 4px;
+}
+
+.edit-shell .chip-add .mini-btn {
+  min-height: 24px;
+  padding: 0;
+}
+
+/* ---------- Caja de asignación interna, más fina ---------- */
+.edit-shell .asig-box {
+  padding: 8px 10px;
+  gap: 6px;
+}
+
+.edit-shell .asig-box > b {
+  font-size: 10px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.edit-shell .asig-grid {
+  gap: 6px;
+}
+
+.edit-shell .asig-item {
+  padding: 5px 8px;
+  border-radius: 2px;
+}
+
+.edit-shell .asig-item span {
+  font-size: 9px;
+}
+
+.edit-shell .asig-item b {
+  font-size: 11px;
+}
+
+.edit-shell .asig-aviso {
+  padding: 4px 10px;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.edit-shell .wk-block-head {
+  min-height: 28px;
+  padding: 4px 10px;
+}
+
+.edit-shell .wk-block-head b {
+  font-size: 10.5px;
+}
+
+.edit-shell .wk-block-head span {
+  font-size: 9.5px;
+}
+
+/* Los dos selects quedan cortos, pero las reglas de estrellas usan todo el ancho */
+.edit-shell .motor-grid {
+  grid-template-columns: 240px 240px minmax(0, 1fr);
+}
+
+.edit-shell .motor-grid > .star-rule-grid {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 900px) {
+  .edit-shell .motor-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .edit-shell .star-rule-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ---------- Contadores y cinta de envíos, más finos ---------- */
+.edit-shell .dercas-ribbon {
+  min-height: 34px;
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  gap: 10px;
+  border-radius: 2px;
+}
+
+.edit-shell .dercas-ribbon b {
+  font-size: 11px;
+}
+
+.edit-shell .dercas-ribbon span {
+  font-size: 10px;
+}
+
+.edit-shell .dercas-btn {
+  min-height: 25px;
+  padding: 0 9px;
+  border-radius: 2px;
+  font-size: 10.5px;
+}
+
+.edit-shell .area-result-grid.states {
+  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+  gap: 5px;
+  margin-bottom: 8px;
+}
+
+.edit-shell .area-result-grid.states article {
+  padding: 5px 8px;
+  border-radius: 2px;
+}
+
+.edit-shell .area-result-grid.states article > span {
+  font-size: 9px;
+}
+
+.edit-shell .area-result-grid.states article b {
+  font-size: 15px;
+}
+
+.edit-shell .res-card {
+  padding: 5px 8px;
+}
+
+.edit-shell .res-card b {
+  font-size: 15px;
+}
+
+/* ===================================================================
+   Las filas del formulario ocupan todo el ancho de la tarjeta:
+   campos parejos, sin espacio muerto a la derecha.
+   =================================================================== */
+.edit-shell .form-grid,
+.edit-shell .form-grid.g4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  justify-content: stretch;
+  gap: 8px 14px;
+}
+
+/* La descripción es un renglón más alta para que se lea completa */
+.edit-shell .form-grid textarea {
+  min-height: 52px;
+}
+
+/* Editor de preguntas sin encabezado propio: la tira de datos es el borde */
+.edit-shell .forms-dercas-strip {
+  flex-wrap: wrap;
+  border-bottom: 1px solid #dadce0;
+}
+
+.edit-shell .forms-dercas-strip .save-state {
+  margin-left: auto;
+  color: var(--ui-muted);
+  font-size: 9.5px;
+}
+
+.edit-shell .page-card > .forms-board {
+  border: 0;
+}
+
+/* Aviso cuando el período no trae órdenes */
+.edit-shell .empty-note {
+  margin: 8px 10px 0;
+  padding: 7px 9px;
+  border-left: 3px solid var(--ui-primary);
+  background: var(--ui-primary-soft);
+  border-radius: 2px;
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+@media (max-width: 1100px) {
+  .edit-shell .form-grid,
+  .edit-shell .form-grid.g4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 700px) {
+  .edit-shell .form-grid,
+  .edit-shell .form-grid.g4 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* La pista de la etiqueta va en la misma línea: así los campos de una
+   fila arrancan todos a la misma altura */
+.edit-shell .field > span small {
+  display: inline;
+  margin-left: 5px;
+  text-transform: none;
+}
+
+/* ===================================================================
+   Paginación del listado de trabajos (igual que el sistema:
+   "Mostrar N registros" arriba y "Mostrando X a Y de Z" abajo)
+   =================================================================== */
+.dl-per-page {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--ui-muted);
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.dl-per-page select {
+  height: 24px;
+  padding: 0 4px;
+  border: 1px solid var(--ui-input-border);
+  border-radius: 2px;
+  background: #fff;
+  color: var(--ui-text);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.dl-table-foot {
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.dl-pager {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.dl-page {
+  min-width: 21px;
+  height: 21px;
+  padding: 0 5px;
+  border: 1px solid var(--ui-border);
+  border-radius: 2px;
+  background: #fff;
+  color: var(--ui-text);
+  font-size: 9.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.dl-page:hover:not(:disabled) {
+  border-color: var(--ui-primary);
+  background: var(--ui-hover);
+  color: var(--ui-primary-dark);
+}
+
+.dl-page.is-active {
+  border-color: var(--ui-primary);
+  background: var(--ui-primary);
+  color: #fff;
+  cursor: default;
+}
+
+.dl-page:disabled {
+  color: #c9ccd0;
+  cursor: not-allowed;
+}
+
+.dl-page-gap {
+  padding: 0 3px;
+  color: var(--ui-muted);
+}

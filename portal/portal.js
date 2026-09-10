@@ -245,11 +245,10 @@
     if (act === "responder") return responder(arg);
   });
 
-  /* La sesión la abre la pantalla de inicio (localhost:3000) */
-  (async () => {
-    const sesion = DL_SESION.exigir(["colaborador", "supervisor", "admin"], "../");
-    if (!sesion) return;
-    state.empleado = sesion;
-    await cargarBandeja();
+  /* Todo vive en un solo lugar: la bandeja está dentro del sistema.
+     Si alguien abre esta dirección, se lo lleva allá. */
+  (() => {
+    const sesion = DL_SESION.actual();
+    window.location.replace(sesion ? "../privado/index.html" : "../index.html");
   })();
 })();

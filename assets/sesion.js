@@ -39,11 +39,18 @@
       window.location.replace(`${raiz}index.html`);
     },
 
-    /* A dónde va cada rol */
+    /* Todos entran al mismo sistema; adentro cada rol ve lo suyo */
     destino(empleado, raiz = "") {
-      return empleado && empleado.role === "admin"
-        ? `${raiz}privado/index.html`
-        : `${raiz}portal/index.html`;
+      return `${raiz}privado/index.html`;
+    },
+
+    esAdmin(empleado) {
+      return Boolean(empleado && empleado.role === "admin");
+    },
+
+    /* Jefe de área: es quien tiene equipo, no quien administra el módulo */
+    esJefe(empleado) {
+      return Boolean(empleado && empleado.supervisor);
     },
 
     /* Protege una pantalla: si no hay sesión, o el rol no alcanza,

@@ -82,10 +82,23 @@ const PERIODO = mesAnterior();
 const HOY = new Date().toISOString().slice(0, 10);
 const FIN_ANIO = `${new Date().getFullYear()}-12-31`;
 
-/* Las ordenes de muestra se fechan siempre dentro del mes evaluado,
-   para que la demo siga teniendo datos sin importar en que mes se abra. */
-function fechaDelPeriodo(dia) {
-  return `${String(dia).padStart(2, "0")}/${String(PERIODO.mes).padStart(2, "0")}/${PERIODO.anio}`;
+/* Las ordenes de muestra se fechan a partir del mes evaluado, para que la
+   demo siga teniendo datos sin importar en que mes se abra.
+   "atras" corre la fecha esa cantidad de meses hacia atras, y asi el
+   listado queda repartido en varios periodos. */
+function fechaDelPeriodo(dia, atras = 0) {
+  const base = new Date(PERIODO.anio, PERIODO.mes - 1 - atras, 1);
+  const anio = base.getFullYear();
+  const mes = base.getMonth() + 1;
+  const ultimo = new Date(anio, mes, 0).getDate();
+  const d = Math.min(Math.max(Number(dia) || 1, 1), ultimo);
+  return `${String(d).padStart(2, "0")}/${String(mes).padStart(2, "0")}/${anio}`;
+}
+
+/* Clave "YYYY-MM" del mes al que pertenece una fecha DD/MM/YYYY */
+function claveDeFecha(fecha) {
+  const iso = aISO(fecha);
+  return iso ? iso.slice(0, 7) : "";
 }
 
 /* Catalogos de apoyo para la ficha del trabajo (los mismos campos
@@ -122,8 +135,8 @@ function correrFecha(fecha, dias) {
 
 const quetzales = (n) => `${Number(n).toFixed(2)} Q`;
 
-function trabajo(code, box, clinic, doctor, patient, status, product, advisor, dia) {
-  const sent = dia ? fechaDelPeriodo(dia) : "—";
+function trabajo(code, box, clinic, doctor, patient, status, product, advisor, dia, atras = 0) {
+  const sent = dia ? fechaDelPeriodo(dia, atras) : "—";
   const ficha = PRODUCTOS[product] || { codigo: "000", ref: "A00000", nombre: product.toUpperCase(), etiqueta: "GENERAL", precio: 300 };
   const unidades = product === "Puente zirconia" ? 3 : 1;
   const total = ficha.precio;
@@ -148,7 +161,7 @@ function trabajo(code, box, clinic, doctor, patient, status, product, advisor, d
     product,
     advisor,
     sent,
-    period: dia ? PERIODO.clave : "",
+    period: dia ? claveDeFecha(sent) : "",
 
     /* ---- Ficha completa del trabajo ---- */
     technician: tecnicoIngreso,
@@ -221,6 +234,172 @@ const TRABAJOS = [
   trabajo("202609103", "510", "CENTRO CLINICO DENTAL", "ISABELA VILLAGRAN", "ANDERSON PEREZ", "facturado", "Carilla feldespática", "Andrea López", 28),
   trabajo("202609462", "277", "DENTES", "ANAITHE RUIZ", "ARNOLDO PELICO", "en proceso", "Prótesis total", "Karla Ruiz", 0),
 ];
+
+/* ------------------------------------------------------------------
+   Carga de prueba: ordenes repartidas en los ultimos 12 meses.
+   Son las clinicas, doctores, estados y productos reales del sistema.
+   Se generan de forma determinista (misma semilla = misma lista), asi
+   la demo no cambia de datos cada vez que se reinicia el servidor.
+   ------------------------------------------------------------------ */
+const CARTERA = [
+  ["ESPECIALISTAS DENTALES INTERNACIONALES", ["ALEJANDRO FLORES"]],
+  ["CLINICA DE ODONTOLOGIA COSMETICA Y ORTODONCIA", ["ILEM MARIA CARAVIA PORTAL"]],
+  ["AM RAMOS DENTAL", ["MARCELINO RAMOS"]],
+  ["SONRIE", ["ANDREA CANCINOS", "FRANCISCO MORALES", "FREDY ALEJANDRO DE PAZ", "ALEJANDRO GONZALEZ", "WILLIAM SAZO", "CECILIA CONSUEGRA", "JUAN JOSE OROZCO", "CRISTIAN JUAREZ", "ANA GUISELA LOPEZ", "ANDRES BELTRAN", "LHESS LEIVA"]],
+  ["DIVAS INNOVADENT", ["AURORA RODRIGUEZ"]],
+  ["CENTRO CLINICO DENTAL", ["ISABELA VILLAGRAN"]],
+  ["DENTES", ["ANAITHE RUIZ"]],
+  ["ZONA DENTAL, S.A.", ["ALAN ANTILLON"]],
+  ["CLINICA INTEGRA DENTAL DRA. CARLA CENTENO", ["CARLA CENTENO"]],
+  ["SIDELMIK DENTAL CLINIC", ["MARIA LUJAN", "WENDY VELASQUEZ"]],
+  ["CLÍNICA ARMONIZA", ["WERNER BERDUCIDO"]],
+  ["CLINICA ADVANCED", ["CARLOS SUCHINI"]],
+  ["CLINICA DENTALITY CENTER", ["SOPHIA ZHOU"]],
+  ["CLINICA SMILE PRO", ["DIEGO CALDERON"]],
+  ["DENTAL EXPRESS", ["ASTRID ROSSANA BRIONES LOPEZ"]],
+  ["CLINICA EYAJ", ["ESLI SALAZAR"]],
+  ["CLINICA CALIFORNIA SMILES", ["ROBERTO RODRIGUEZ"]],
+  ["CLINICA ALTANDENT", ["CLAUDIA GRANADOS"]],
+  ["CLINICA CROWNDENT DENTAL CENTRE", ["OSWALD MARQUEZ"]],
+  ["CLINICA MISTER DENT", ["DAMARIS CASTILLO"]],
+  ["CLINICA SOL DENTAL", ["ANDREA DIEGUEZ"]],
+  ["PEREZ Y FRANCO ESTETICA DENTAL", ["ANA LUCIA FRANCO"]],
+  ["CLINICA MIRANDA´S DENTAL", ["CARMEN MIRANDA"]],
+  ["CLINICA LA MERCED", ["LIZ GONZALES"]],
+  ["DENTAL DESIGN DR. GUILLERMO CONTRERAS", ["GUILLERMO CONTRERAS"]],
+  ["DENTAL ONE - RITA MEDA", ["RITA MEDA"]],
+  ["CLINICA DENTAL DR. FERNANDO CASTAÑEDA", ["FERNANDO ERNESTO CASTAÑEDA RAMIREZ"]],
+  ["CLINICA ODONTO CENTRO", ["MAXWELL CASTAÑEDA"]],
+  ["DENTAL ADVANCE GUATEMALA", ["CESAR BARRERA PELLECER"]],
+  ["CLINICA ODONTOLOGICA HURTARTE", ["JUAN PABLO HURTARTE"]],
+  ["CLINICA DENTAL SAN MIGUEL", ["WALTER SIERRA"]],
+  ["CENTRO DENTAL LIZAMA", ["MYNOR LIZAMA WINTER"]],
+  ["INNOVADENT CLÍNICA DENTAL ORIENTE", ["PAMELA MONROY"]],
+  ["BRIDENT", ["SERGIO MENENDEZ"]],
+  ["CLINICA ODONTOSTETIC", ["FRANCISCO VALDEZ"]],
+  ["VILLA DENTAL", ["MELVIN SOLIS"]],
+  ["CLINICA DR. JORGE BELTRANENA", ["JORGE BELTRANENA"]],
+  ["CENTRO DENTAL SAMPEDRANO", ["CAROLINA DAVID"]],
+  ["CLINICA SOLEORTODONCIA", ["ALEJANDRO SOLE"]],
+  ["CENTRO DENTAL SAN RAFAEL", ["RAUL ADOLFO MURGA MUÑOZ"]],
+  ["CENTRO DENTAL ZIRCONIA", ["EDWARD BATCH"]],
+  ["LA DIVINA PROVIDENCIA", ["MARCO ALDANA"]],
+  ["CLINICA DENTAL RUANO RAMOS", ["VICTOR HUGO MORALES"]],
+  ["STUDIO DENTAL", ["ROSARIO GUTIERREZ"]],
+  ["DENTAL MAKEOVER GT", ["PATRICIA MORALES DE CARRANZA"]],
+  ["CLINICA DENTAL ART", ["MADELEIN BARRIENTOS"]],
+  ["DENTPAL CLINIC", ["SARA CECILIA PALMA"]],
+  ["DENTAL ONE / DRA. ALEJANDRA VELASQUEZ", ["ALEJANDRA VELASQUEZ"]],
+  ["ONE CLINICA DENTAL", ["HELMUTH WINTHER"]],
+  ["CLINICA DRA. MABIS PEREZ", ["MABIS PEREZ"]],
+  ["CLINIDENT JALAPA", ["DIANA RECINOS"]],
+  ["CLINICA BRILLANCE DENT", ["CINTYA GERALDINE HERNANDEZ"]],
+  ["CLINICA DENTAL DRA. LEIDY LEMUS", ["LEIDY LEMUS"]],
+  ["CAYARGA DENTAL", ["RODRIGO CAYARGA"]],
+  ["CLINICA DENTICURE", ["DAVID RIVAS", "ENGRACIA QUIJADA"]],
+  ["CLINICA PRODENT GT.", ["DAVID ROBERTO BARRENO CITALAN"]],
+  ["CLINICA SONRISA INTEGRAL", ["ALDO MENDIZABAL HIGUEROS"]],
+  ["ODONTOMEDIC SAN MIGUEL", ["JORGE FLORES"]],
+  ["DENTAL ONE - DAVID ORANTES", ["DAVID ALEJANDRO ORANTES"]],
+  ["CLINICAS DENTALES GRUPO DENT", ["IRENE DE LEON", "LESLY ALBUREZ"]],
+  ["DAVOLI, S.A.", ["ASTRID OLIVEROS"]],
+  ["UNIVERSIDAD FRANCISCO MARROQUIN", ["NANCY FIGUEROA"]],
+  ["NOVA DENTAL", ["HERBERT RIVERA"]],
+  ["PERIODONCIA INTEGRAL", ["LUIS ANTONIO CALLEJAS"]],
+  ["CENTRO ODONTOLOGICO DE ESPECIALISTAS", ["JORGE ROLANDO OLIVA BARRIENTOS"]],
+  ["DENTAL-ES", ["MARIA JOSE HURTARTE"]],
+  ["SMILE UP", ["LUIS PINEDA"]],
+  ["CLINICA STUDIO DENTAL Dr. JOSUE HERNANDEZ", ["JOSUE HERNANDEZ"]],
+  ["CLINICA GRUPO DENTAL DE GUATEMALA", ["FERNANDO CACERES"]],
+  ["CLINICA DENTAL CEDENT", ["HAROLD GARCIA"]],
+  ["STETICA DENTAL MENDIA", ["HORACIO MENDIA"]],
+  ["CLINICA DENTIVITALE", ["CAROLIN VILLATORO"]],
+  ["CLINICA DR. SANTIAGO YON", ["SANTIAGO YON"]],
+  ["CLINICA DIGITAL DENTAL ART", ["CHRISTIAN ORANTES"]],
+  ["CLINICAS DENTALES PARROQUIA", ["ANA LUCIA PARDO"]],
+  ["BADENT", ["HUGO BARBALES"]],
+  ["DENTAL PERFECTION", ["JAIME DE LEON MENDEZ"]],
+  ["CLINICAS INTEGRALES DUARTE", ["JESSENIA PINEDA"]],
+  ["CLINICA INDENT", ["JAVIER BOLAÑOS FLORES"]],
+  ["SALUD DENTAL - DRA. SARA PALMA", ["SARA PALMA MORALES"]],
+  ["CLINICA STAR DENTAL", ["VERONICA OROZCO"]],
+  ["CLINICA DENTAL FAMILIAR ORTODONCIA MAXILOFACIAL", ["LUIS EDUARDO PEREZ"]],
+  ["CLINICA SANTOS", ["ALEJANDRA LOPEZ"]],
+  ["DENTAL QUALITY SOLUTIONS", ["WALESKA ARREAZA ANZUETO"]],
+  ["MI DENTISTA INTEGRA", ["JAVIER MARTIN"]],
+  ["CENTRO DENTAL LIZAMA", ["MYNOR LIZAMA WINTER"]],
+];
+
+const PACIENTES_NOMBRE = [
+  "MARIA", "JOSE", "ANA", "CARLOS", "LUISA", "JORGE", "SILVIA", "MARIO", "GABRIELA", "EDUARDO",
+  "CLAUDIA", "FERNANDO", "PATRICIA", "RODRIGO", "SANDRA", "OSCAR", "VERONICA", "ALEJANDRO", "KARLA", "HUGO",
+  "ROSA", "DIEGO", "LORENA", "PABLO", "ANDREA", "MYNOR", "ESTELA", "BYRON", "MARISOL", "WALTER",
+  "IRMA", "SERGIO", "YESENIA", "HELMUTH", "BRENDA", "MARCO", "GLENDA", "ESTUARDO", "NOHELIA", "ARNOLDO",
+];
+const PACIENTES_APELLIDO = [
+  "LOPEZ", "GARCIA", "MORALES", "HERNANDEZ", "GONZALEZ", "PEREZ", "RAMIREZ", "SANCHEZ", "CASTILLO", "VASQUEZ",
+  "MARROQUIN", "DE LEON", "CHOCHE", "GUERRA", "OLIVA", "PELICO", "SECAIRAS", "MOLINA", "NAVAS", "BEJOT",
+  "ZETINO", "FOLGAR", "CHICOL", "HACIENDA", "IZARA", "SOSA", "CRISTALES", "IDIGORAS", "MADRID", "ARCHILA",
+  "QUEVEDO", "MENDOZA", "CEFELINO", "PAZ", "TEJAXUM", "CENTENO", "SINIBALDI", "ROSALES", "ESCOBAR", "URRUTIA",
+];
+
+const ESTADOS_TRABAJO = [
+  "enviado", "enviado", "enviado", "enviado", "enviado",
+  "facturado", "facturado", "facturado",
+  "en proceso", "en laboratorio", "finalizado", "en clínica", "borrador",
+];
+
+const PRODUCTOS_LISTA = Object.keys(PRODUCTOS);
+const ASESORAS = ["Andrea López", "María Fernanda Soto", "Karla Ruiz", "Mónica Alvarado", "Silvia Recinos"];
+
+/* Dado con semilla fija (xorshift): da la misma serie siempre, pero
+   reparte parejo entre todas las opciones. */
+function dado(semilla) {
+  let x = semilla | 0 || 1;
+  return (tope) => {
+    x ^= x << 13; x |= 0;
+    x ^= x >>> 17;
+    x ^= x << 5; x |= 0;
+    return Math.abs(x) % tope;
+  };
+}
+
+/* MESES_ATRAS meses de historia; el mes evaluado (atras = 0) lleva mas
+   carga para que la encuesta automatica siempre tenga con que trabajar. */
+const MESES_ATRAS = 12;
+
+function generarTrabajos(cantidad = 520) {
+  const tirar = dado(20260910);
+  const lista = [];
+  const usados = new Set(TRABAJOS.map((t) => t.code));
+
+  for (let i = 0; i < cantidad; i += 1) {
+    /* Reparto parejo: cada mes de los ultimos 13 recibe su tanda */
+    const atras = i % (MESES_ATRAS + 1);
+    const [clinica, doctores] = CARTERA[tirar(CARTERA.length)];
+    const doctor = doctores[tirar(doctores.length)];
+    const paciente = `${PACIENTES_NOMBRE[tirar(PACIENTES_NOMBRE.length)]} ${PACIENTES_APELLIDO[tirar(PACIENTES_APELLIDO.length)]} ${PACIENTES_APELLIDO[tirar(PACIENTES_APELLIDO.length)]}`;
+    const estado = ESTADOS_TRABAJO[tirar(ESTADOS_TRABAJO.length)];
+    const producto = PRODUCTOS_LISTA[tirar(PRODUCTOS_LISTA.length)];
+    const asesora = ASESORAS[tirar(ASESORAS.length)];
+    const caja = String(1 + tirar(540));
+    /* Solo lo que ya salió del laboratorio lleva fecha de envío */
+    const dia = ["enviado", "facturado"].includes(estado) ? 1 + tirar(28) : 0;
+
+    /* Codigo con el año y el mes de la orden, como los del ERP */
+    const base = new Date(PERIODO.anio, PERIODO.mes - 1 - atras, 1);
+    let code = `${base.getFullYear()}${String(base.getMonth() + 1).padStart(2, "0")}${String(1000 + i).padStart(4, "0")}`;
+    while (usados.has(code)) code = `${code}-2`;
+    usados.add(code);
+
+    lista.push(trabajo(code, caja, clinica, doctor, paciente, estado, producto, asesora, dia, atras));
+  }
+
+  /* Del mas reciente al mas antiguo, como en el sistema */
+  return lista.sort((a, b) => String(aISO(b.sent)).localeCompare(String(aISO(a.sent))));
+}
+
+TRABAJOS.push(...generarTrabajos(520));
 
 /* ------------------------------------------------------------------ */
 
