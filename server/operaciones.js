@@ -25,7 +25,7 @@ function armarMensaje(encuesta, instancia) {
 }
 
 /* RF-ENC-001: una encuesta por doctor con todos sus trabajos elegibles */
-function generar(encuesta) {
+function candidatos(encuesta) {
   catalogo.aplicarPeriodoAuto(encuesta);
   const periodo = encuesta.period;
   const manual = encuesta.audienceMode === "Selección manual";
@@ -60,7 +60,7 @@ function generar(encuesta) {
       finishedAt: "",
       answers: null,
     }));
-    return db.instancias.reemplazarPeriodo(encuesta.id, periodo, nuevas);
+    return nuevas;
   }
 
   if (!encuesta.works.enabled) {
@@ -79,7 +79,7 @@ function generar(encuesta) {
       finishedAt: "",
       answers: null,
     };
-    return db.instancias.reemplazarPeriodo(encuesta.id, periodo, [instancia]);
+    return [instancia];
   }
 
   const grupos = catalogo.agruparPorDoctor(encuesta.works.statuses, { desde: encuesta.periodFrom, hasta: encuesta.periodTo }, {
@@ -102,14 +102,41 @@ function generar(encuesta) {
     answers: null,
   }));
 
-  return db.instancias.reemplazarPeriodo(encuesta.id, periodo, nuevas);
+  return nuevas;
+}
+
+/* Ejecutar por primera vez o volver a ejecutar todo: borra lo del período
+   y lo vuelve a crear desde cero. */
+function generar(encuesta) {
+  const nuevas = candidatos(encuesta);
+  return db.instancias.reemplazarPeriodo(encuesta.id, periodoDe(encuesta), nuevas);
+}
+
+/* La persona/doctor al que apunta una instancia, para no duplicarla */
+const claveInstancia = (i) => String(i.employeeId || i.doctor || "").toUpperCase();
+
+/* Ejecutar solo lo que falta: conserva lo ya generado (y lo respondido)
+   y agrega únicamente las instancias que nunca se crearon. */
+function completar(encuesta) {
+  const periodo = periodoDe(encuesta);
+  const existentes = db.instancias.listar(encuesta.id).filter((i) => i.period === periodo);
+  const yaEstan = new Set(existentes.map(claveInstancia));
+  const faltantes = candidatos(encuesta).filter((i) => !yaEstan.has(claveInstancia(i)));
+  faltantes.forEach((i) => db.instancias.guardar(i));
+  return { agregadas: faltantes.length, existentes: existentes.length };
+}
+
+/* El período ya normalizado por aplicarPeriodoAuto */
+function periodoDe(encuesta) {
+  catalogo.aplicarPeriodoAuto(encuesta);
+  return encuesta.period;
 }
 
 /* RF-ENC-003: envio por API de WhatsApp con enlace individual */
-async function enviar(encuesta) {
+async function enviar(encuesta, { soloNoEnviados = false } = {}) {
   const pendientes = db.instancias
     .listar(encuesta.id)
-    .filter((i) => i.state === "Generada" || i.state === "Enviada");
+    .filter((i) => (soloNoEnviados ? i.state === "Generada" && !i.sentAt : i.state === "Generada" || i.state === "Enviada"));
 
   const resultados = [];
   for (const instancia of pendientes) {
@@ -317,6 +344,6 @@ function resultadoDe(id) {
 }
 
 module.exports = {
-  generar, enviar, cerrar, abrir, responder, respuestas, encuestasDeTrabajo,
+  generar, completar, enviar, cerrar, abrir, responder, respuestas, encuestasDeTrabajo,
   resultados, resultadoDe, armarMensaje, ahora,
 };

@@ -82,6 +82,7 @@
     generar: (id) => pedir("POST", `/api/encuestas/${id}/generar`),
     enviar: (id) => pedir("POST", `/api/encuestas/${id}/enviar`),
     ejecutar: (id) => pedir("POST", `/api/encuestas/${id}/ejecutar`),
+    completar: (id) => pedir("POST", `/api/encuestas/${id}/completar`),
     cerrar: (id) => pedir("POST", `/api/encuestas/${id}/cerrar`),
     programarPrueba: (id, minutos) => pedir("POST", `/api/encuestas/${id}/prueba`, { minutos }),
     instancias: (id) => pedir("GET", `/api/encuestas/${id}/instancias`),

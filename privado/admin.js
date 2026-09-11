@@ -21,11 +21,11 @@
   ];
 
   const STEPS = [
+    ["envio", "WhatsApp", "Canal y mensaje"],
     ["general", "Datos generales", "Nombre, clasificación y descripción"],
     ["questions", "Preguntas", "Editor tipo Google Forms"],
     ["audience", "Público", "A quién se dirige y si usa órdenes"],
-    ["schedule", "Programación y envío", "Cada cuánto corre y cómo se manda"],
-    ["review", "Revisión", "Verificar y publicar"],
+    ["schedule", "Programación", "Cada cuánto corre"],
   ];
 
   const state = {
@@ -38,7 +38,7 @@
     respuestas: [],
     mensajes: [],
     estado: null,
-    step: "general",
+    step: STEPS[0][0],
     activeSectionId: "",
     activeQuestionId: "",
     openQuestionId: "",
@@ -48,6 +48,7 @@
     filtros: null,
     filtrosOpen: false,
     filtrosTrabajos: null,
+    confirmar: null,
     traPagina: 1,
     traPorPagina: 50,
     workSurveys: null,
@@ -413,7 +414,7 @@
        entra directo en edición. */
     state.editando = esNueva;
     state.editorTab = "detalle";
-    state.step = "general";
+    state.step = STEPS[0][0];
     state.activeSectionId = state.draft.sections[0].id;
     state.activeQuestionId = state.draft.sections[0].questions[0].id;
     state.openQuestionId = state.activeQuestionId;
@@ -630,7 +631,11 @@
   }
 
   /* Acciones que necesitan la encuesta ya creada en el servidor */
-  const REQUIERE_GUARDADA = ["sends", "ejecutar-ahora", "probar-agenda", "generar", "enviar", "cerrar", "public-link", "mensaje-instancia"];
+  const REQUIERE_GUARDADA = [
+    "sends", "ejecutar-ahora", "ejecutar-ahora-confirmado", "ejecutar-no-enviados",
+    "ejecutar-no-enviados-confirmado", "probar-agenda", "generar", "enviar", "cerrar",
+    "public-link", "mensaje-instancia",
+  ];
 
   async function runAction(act, arg, node) {
     const survey = state.draft;
@@ -648,7 +653,7 @@
           const plantilla = await DL.api.plantilla(arg);
           abrirBorrador(plantilla, true);
           state.view = "survey-edit";
-          state.step = "general";
+          state.step = STEPS[0][0];
           renderApp();
           showToast(`Encuesta ${arg.toLowerCase()} en blanco. Todavía no se guarda: use los botones de abajo.`);
           return;
@@ -667,13 +672,36 @@
           return;
         }
 
+        /* Paso 1: se revisa y se pide confirmación */
         case "crear-encuesta":
+          if (!survey) return;
+          pedirConfirmacion({
+            titulo: state.esNueva ? "¿Crear y activar esta encuesta?" : "¿Guardar los cambios de esta encuesta?",
+            accion: "crear-encuesta-confirmado",
+            etiqueta: state.esNueva ? "Sí, crear encuesta" : "Sí, guardar cambios",
+            survey,
+          });
+          return;
+
+        case "confirmar-no":
+          state.confirmar = null;
+          renderView();
+          return;
+
+        case "confirmar-si": {
+          const pendiente = state.confirmar;
+          state.confirmar = null;
+          if (!pendiente) return;
+          renderView();
+          return runAction(pendiente.accion, pendiente.arg);
+        }
+
+        /* Paso 2: lo que de verdad crea o guarda */
+        case "crear-encuesta-confirmado":
         case "crear-y-enviar": {
           if (!survey) return;
           const faltan = checklist().filter((item) => !item[1]).map((item) => item[0]);
           if (faltan.length) {
-            state.step = "review";
-            renderApp();
             showToast("Falta completar: " + faltan.join(" · "));
             return;
           }
@@ -731,7 +759,7 @@
           }
           abrirBorrador(encuesta);
           state.view = "survey-edit";
-          state.step = node && node.dataset.target ? node.dataset.target : "general";
+          state.step = node && node.dataset.target ? node.dataset.target : STEPS[0][0];
           renderApp();
           return;
         }
@@ -881,6 +909,14 @@
         case "editor-tab": {
           state.editorTab = arg;
           detenerPoll();
+          /* Si la encuesta todavía no existe en el servidor no hay nada que
+             consultar: el tab se pinta igual, con sus tablas vacías. */
+          if (state.esNueva) {
+            if (arg === "respuestas") state.respuestas = [];
+            if (arg === "envios") state.instancias = [];
+            renderView();
+            return;
+          }
           if (arg === "respuestas") state.respuestas = await DL.api.respuestas(survey.id);
           if (arg === "envios") state.instancias = await DL.api.instancias(survey.id);
           renderView();
@@ -1172,13 +1208,51 @@
           return;
         }
 
-        case "ejecutar-ahora": {
-          showToast("Ejecutando el JOB…");
+        case "ejecutar-ahora":
+          if (!survey) return;
+          pedirConfirmacion({
+            titulo: (state.instancias || []).length
+              ? "¿Volver a ejecutar? Se borra y se regenera todo el período"
+              : "¿Ejecutar la encuesta por primera vez?",
+            accion: "ejecutar-ahora-confirmado",
+            etiqueta: (state.instancias || []).length ? "Sí, regenerar todo" : "Sí, ejecutar",
+            survey,
+          });
+          return;
+
+        case "ejecutar-no-enviados":
+          if (!survey) return;
+          pedirConfirmacion({
+            titulo: "¿Ejecutar solo lo que falta?",
+            accion: "ejecutar-no-enviados-confirmado",
+            etiqueta: "Sí, ejecutar los no enviados",
+            survey,
+          });
+          return;
+
+        case "ejecutar-ahora-confirmado": {
+          showToast("Ejecutando…");
           const salida = await DL.api.ejecutar(survey.id);
           state.instancias = await DL.api.instancias(survey.id);
           state.surveys = await DL.api.encuestas();
           renderView();
-          showToast(`JOB ejecutado: ${salida.instancias} encuesta(s), ${salida.envios.length} envío(s).`);
+          showToast(`${salida.instancias} encuesta(s) generada(s), ${salida.envios.length} envío(s).`);
+          return;
+        }
+
+        /* Conserva lo ya generado y respondido: solo agrega lo que falta
+           y envía lo que nunca salió. */
+        case "ejecutar-no-enviados-confirmado": {
+          showToast("Ejecutando lo que falta…");
+          const salida = await DL.api.completar(survey.id);
+          state.instancias = await DL.api.instancias(survey.id);
+          state.surveys = await DL.api.encuestas();
+          renderView();
+          showToast(
+            salida.agregadas || salida.envios.length
+              ? `${salida.agregadas} encuesta(s) agregada(s), ${salida.envios.length} envío(s).`
+              : "No había nada pendiente: todo estaba generado y enviado."
+          );
           return;
         }
 
@@ -1679,7 +1753,7 @@
     const permitidas = esJefe() ? ["inbox", "my-results", "result-detail"] : ["inbox"];
     if (!esAdmin() && !permitidas.includes(state.view)) state.view = "inbox";
 
-    els.appView.innerHTML = (vistas[state.view] || (esAdmin() ? renderSurveyList : renderBandejaInterna))();
+    els.appView.innerHTML = (vistas[state.view] || (esAdmin() ? renderSurveyList : renderBandejaInterna))() + renderConfirmar();
     if (state.view === "inbox" && state.respondiendo) montarRespuesta();
     if (state.view === "survey-edit" && !state.editando) bloquearEdicion();
     if (state.focusAfterRender) {
@@ -1693,6 +1767,106 @@
   }
 
   /* ---------------- Lista ---------------- */
+  /* ==================================================================
+     Verificación antes de guardar o de ejecutar
+     "errores" impiden continuar; "avisos" solo advierten y el usuario
+     decide. Así nadie activa una encuesta a medio configurar sin saberlo.
+     ================================================================== */
+  function revisar(survey) {
+    const secciones = (survey.sections || []).filter((sec) => sec.active !== false);
+    const preguntas = secciones.flatMap((sec) => (sec.questions || []).filter((q) => q.active !== false));
+    const externa = survey.classification === "Externa";
+    const errores = [];
+    const avisos = [];
+
+    if (!String(survey.name || "").trim()) errores.push("La encuesta no tiene nombre.");
+    if (preguntas.length === 0) errores.push("No hay ninguna pregunta activa.");
+    const sinArea = preguntas.filter((q) => !q.area).length;
+    if (sinArea) errores.push(`${sinArea} pregunta(s) sin área responsable.`);
+
+    if (externa && survey.channel === "API WhatsApp" && !String(survey.whatsappMessage || "").trim()) {
+      errores.push("El canal es WhatsApp pero el mensaje está vacío.");
+    }
+    if (externa && survey.audienceMode === "Selección manual") {
+      if (!(survey.audienceDoctors || []).length) errores.push("No se seleccionó ningún doctor.");
+      if (!(survey.works.selectedIds || []).length) errores.push("No se seleccionó ninguna orden.");
+    }
+    if (!externa && !survey.areaKey) errores.push("La encuesta interna no tiene área asignada.");
+
+    /* Avisos: se puede guardar igual, pero conviene saberlo */
+    const sinTitulo = preguntas.filter((q) => /^pregunta sin t[íi]tulo$/i.test(String(q.text || "").trim())).length;
+    if (sinTitulo) avisos.push(`${sinTitulo} pregunta(s) siguen con el texto por defecto "Pregunta sin título".`);
+    const catSinNombre = secciones.filter((sec) => /^nueva categor[íi]a$/i.test(String(sec.title || "").trim())).length;
+    if (catSinNombre) avisos.push(`${catSinNombre} categoría(s) siguen llamándose "Nueva categoría".`);
+    if (!String(survey.description || "").trim()) avisos.push("La encuesta no tiene descripción: quien la abra no verá ninguna explicación.");
+    if (!survey.schedule.startDate || !survey.schedule.endDate) {
+      avisos.push("La ventana de disponibilidad está incompleta.");
+    } else if (survey.schedule.endDate < new Date().toISOString().slice(0, 10)) {
+      avisos.push("La ventana de disponibilidad ya terminó: no se ejecutará sola.");
+    }
+    if (externa) {
+      const doctores = [...new Set(elegibles().map((w) => w.doctor))].length;
+      if (!doctores) avisos.push(`El período ${etiquetaPeriodo()} no tiene órdenes enviadas: no se generaría ninguna encuesta.`);
+    } else {
+      const cuantos = (survey.respondents || []).length || ((state.alcanceInterno && state.alcanceInterno.gente) || []).length;
+      if (!cuantos) avisos.push("No hay colaboradores que respondan esta encuesta.");
+    }
+
+    /* Lo que sí está listo, para que el usuario lo vea de un vistazo */
+    const listo = [
+      `${secciones.length} categoría(s) y ${preguntas.length} pregunta(s)`,
+      externa
+        ? `${survey.audienceMode === "Selección manual" ? `${(survey.audienceDoctors || []).length} doctor(es) elegidos` : "todos los doctores del período"} · ${esc(etiquetaPeriodo())}`
+        : `área ${survey.areaKey || "—"} · ${(survey.respondents || []).length || "—"} colaborador(es)`,
+      `canal ${survey.channel} · repetición ${survey.schedule.repeat}`,
+    ];
+
+    return { errores, avisos, listo };
+  }
+
+  /* Abre el diálogo; si no hay nada que advertir igual se muestra el
+     resumen, porque la idea es que el usuario confirme a conciencia. */
+  function pedirConfirmacion({ titulo, accion, etiqueta, survey }) {
+    const { errores, avisos, listo } = revisar(survey);
+    state.confirmar = { titulo, accion, etiqueta, errores, avisos, listo };
+    renderView();
+  }
+
+  function renderConfirmar() {
+    const c = state.confirmar;
+    if (!c) return "";
+    const bloqueado = c.errores.length > 0;
+
+    return `
+      <div class="dl-modal-fondo">
+        <div class="dl-modal" role="dialog" aria-modal="true">
+          <div class="dl-modal-head">
+            <b>${esc(c.titulo)}</b>
+          </div>
+          <div class="dl-modal-body">
+            ${bloqueado ? `
+              <p class="dl-modal-intro">No se puede continuar hasta corregir esto:</p>
+              <ul class="dl-check mal">${c.errores.map((t) => `<li>${esc(t)}</li>`).join("")}</ul>
+            ` : ""}
+
+            ${c.avisos.length ? `
+              <p class="dl-modal-intro">${bloqueado ? "Además, revise:" : "Antes de continuar, revise:"}</p>
+              <ul class="dl-check aviso">${c.avisos.map((t) => `<li>${esc(t)}</li>`).join("")}</ul>
+            ` : ""}
+
+            ${!bloqueado && !c.avisos.length ? `<p class="dl-modal-intro">Todo está configurado. Así va a quedar:</p>` : ""}
+            ${!bloqueado ? `<ul class="dl-check bien">${c.listo.map((t) => `<li>${t}</li>`).join("")}</ul>` : ""}
+          </div>
+          <div class="dl-modal-pie">
+            ${bloqueado
+              ? `<button class="dercas-btn" type="button" data-act="confirmar-no">Volver a revisar</button>`
+              : `<button class="dercas-btn ok" type="button" data-act="confirmar-si">${esc(c.etiqueta)}</button>
+                 <button class="dercas-btn cancel" type="button" data-act="confirmar-no">Volver a revisar</button>`}
+          </div>
+        </div>
+      </div>`;
+  }
+
   /* ==================================================================
      ENCUESTAS · Mis resultados (jefes de área)
      ================================================================== */
@@ -2071,33 +2245,19 @@
   function cuerpoEnvios() {
     const survey = draft();
     const instancias = state.instancias || [];
-    const conteo = DL.STATES.map((nombre) => [nombre, instancias.filter((item) => item.state === nombre).length]);
-    const wa = (state.estado && state.estado.whatsapp) || {};
     const externa = isExternal();
+    const yaCorrio = instancias.length > 0;
+    const sinEnviar = instancias.filter((item) => item.state === "Generada" && !item.sentAt).length;
 
     return `
-      <div class="dercas-ribbon">
-        <div>
-          <b>${externa ? "Generación y envío por WhatsApp" : "Generación para los colaboradores"}</b>
-          <span>${
-            externa
-              ? wa.conectado
-                ? `Conectado como <b>+${esc(wa.numero)}</b>; los envíos de prueba llegan a <b>+${esc(state.estado.destino)}</b>.`
-                : "WhatsApp no está conectado: los mensajes quedan en la bitácora."
-              : "Cada colaborador la responde desde su tab Mis encuestas."
-          }</span>
-        </div>
+      <div class="dercas-ribbon solo-acciones">
         <div class="ribbon-tags">
-          <button class="btn primary" type="button" data-act="ejecutar-ahora">Ejecutar ahora</button>
-          <button class="btn" type="button" data-act="generar">Solo generar</button>
-          ${externa ? `<button class="btn" type="button" data-act="enviar">Enviar</button>` : ""}
-          <button class="btn" type="button" data-act="cerrar-ventana">Cerrar ventana</button>
+          <button class="btn primary" type="button" data-act="ejecutar-ahora">${yaCorrio ? "Volver a ejecutar (todos)" : "Ejecutar primera vez"}</button>
+          <button class="btn" type="button" data-act="ejecutar-no-enviados">Ejecutar no enviados${sinEnviar ? ` (${sinEnviar})` : ""}</button>
         </div>
       </div>
 
-      <div class="area-result-grid states">
-        ${conteo.map(([label, value]) => `<article><span>${esc(label)}</span><b>${value}</b></article>`).join("")}
-      </div>
+      ${state.esNueva ? `<p class="empty-note">La encuesta todavía no se ha creado. Guárdela primero y podrá ejecutarla desde aquí.</p>` : ""}
 
       <section class="dl-card">
         <div class="wk-block-head"><div><b>Envíos del período</b></div><span class="wk-count">${instancias.length}</span></div>
@@ -2110,7 +2270,7 @@
             </tr></thead>
             <tbody>
               ${instancias.length === 0
-                ? `<tr><td colspan="9">Aún no hay envíos. Pulse <b>Ejecutar ahora</b>.</td></tr>`
+                ? `<tr><td colspan="9">Aún no hay envíos. Pulse <b>Ejecutar primera vez</b>.</td></tr>`
                 : instancias.map((item) => `
                     <tr>
                       <td><b>${esc(item.doctor)}</b> <i>${esc(item.periodLabel)}</i></td>
@@ -2136,7 +2296,7 @@
   /* ---- Tab Detalle: los cinco pasos de siempre ---- */
   function cuerpoDetalle() {
     const stepIndex = STEPS.findIndex(([id]) => id === state.step);
-    const body = { general: stepGeneral, audience: stepAudience, schedule: stepSchedule, questions: stepQuestions, review: stepReview }[state.step]();
+    const body = ({ general: stepGeneral, audience: stepAudience, schedule: stepSchedule, envio: stepEnvio, questions: stepQuestions }[state.step] || stepGeneral)();
 
     return `
       <ol class="wizard-steps">
@@ -2154,7 +2314,6 @@
         <div class="form-actions">
           <button class="dercas-btn ok" type="button" data-act="crear-encuesta">${state.esNueva ? "Crear encuesta" : "Guardar cambios"}</button>
           <button class="dercas-btn" type="button" data-act="guardar-borrador">Guardar como borrador</button>
-          ${isExternal() ? `<button class="dercas-btn" type="button" data-act="crear-y-enviar">${state.esNueva ? "Crear y enviar" : "Guardar y enviar"}</button>` : ""}
           <button class="dercas-btn cancel" type="button" data-act="cancelar">Cancelar</button>
         </div>` : ""}`;
   }
@@ -2422,13 +2581,21 @@
             <input id="minutosPrueba" type="number" min="1" max="60" value="2" style="width:70px">
             <span class="tiny">minutos</span>
             <button class="btn" type="button" data-act="probar-agenda">Programar prueba</button>
-            <button class="btn primary" type="button" data-act="ejecutar-ahora">Ejecutar ahora</button>
           </div>
         </div>
-      </section>
+      </section>`;
+  }
 
+  /* ==================================================================
+     Paso WhatsApp (o Envío en las internas): canal y mensaje
+     ================================================================== */
+  function stepEnvio() {
+    const survey = draft();
+    const external = isExternal();
+
+    return `
       <section class="page-card">
-        <h2 class="card-title">Envío</h2>
+        <h2 class="card-title">${external ? "WhatsApp" : "Envío"}</h2>
         <div class="form-grid g4">
           <label class="field"><span>Canal *</span><select data-survey-field="channel">${options(external ? ["API WhatsApp", "Enlace directo"] : ["Enlace directo", "Correo interno"], survey.channel)}</select></label>
           ${survey.channel === "API WhatsApp"
@@ -2647,44 +2814,6 @@
           ${starRules}
         </div>
       </div>`;
-  }
-
-  function stepReview() {
-    const survey = draft();
-    const items = checklist();
-    const pending = items.filter(([, ok]) => !ok).length;
-    const questions = survey.sections.flatMap((section) => section.questions);
-    const byArea = {};
-    questions.forEach((question) => (byArea[question.area] = (byArea[question.area] || 0) + 1));
-
-    return `
-      <section class="page-card">
-        <h2 class="card-title">Lista de verificación</h2>
-        <div class="publish-check">${items.map(([label, ok]) => `<div class="${ok ? "ok" : "no"}"><span>${ok ? "✓" : "!"}</span>${esc(label)}</div>`).join("")}</div>
-        ${pending ? `<p class="empty-note">Faltan ${pending} punto(s) por completar.</p>` : `<p class="ready-note">Todo listo. Ya puede crear la encuesta con el botón <b>Crear encuesta</b>.</p>`}
-      </section>
-      <section class="page-card">
-        <h2 class="card-title">Resumen</h2>
-        <div class="review-grid">
-          <div><span>Clasificación</span><b>${esc(survey.classification)} · ${esc(survey.subtype)}</b></div>
-          <div><span>Responde</span><b>${esc(isExternal() ? (survey.audienceMode === "Selección manual" ? `${(survey.audienceDoctors || []).length} doctor(es) seleccionados` : "Todos los doctores del período") : survey.respondent)}</b></div>
-          <div><span>Canal</span><b>${esc(survey.channel)}</b></div>
-          <div><span>Repetición</span><b>${esc(survey.schedule.repeat)}</b></div>
-          <div><span>Próxima ejecución</span><b>${esc(survey.schedule.nextRun || "—")}</b></div>
-          <div><span>Órdenes</span><b>${survey.works.enabled ? `${survey.works.selectedIds.length} cargadas` : "No utiliza"}</b></div>
-          <div><span>Categorías</span><b>${survey.sections.length}</b></div>
-          <div><span>Preguntas</span><b>${questions.length}</b></div>
-        </div>
-        <div class="area-map">
-          <b>Distribución por área responsable</b>
-          <div class="area-map-list">${Object.entries(byArea).map(([area, count]) => `<span><b>${count}</b> ${esc(area)}</span>`).join("")}</div>
-        </div>
-        <div class="review-actions">
-          <button class="btn" type="button" data-act="preview">Probar la encuesta</button>
-          <button class="btn" type="button" data-act="public-link">Abrir enlace público</button>
-          <button class="btn primary" type="button" data-act="sends" data-arg="">Ir a envíos</button>
-        </div>
-      </section>`;
   }
 
   /* ---------------- Envíos ---------------- */

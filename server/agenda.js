@@ -97,19 +97,21 @@ function proximaEjecucion(encuesta) {
   return ventana(candidata, d.desde, d.hasta);
 }
 
-async function ejecutarGeneracion(encuesta, motivo) {
-  console.log(`[agenda] Generando "${encuesta.name}" (${motivo})`);
-  const instancias = operaciones.generar(encuesta);
+async function ejecutarGeneracion(encuesta, motivo, { soloNoEnviados = false } = {}) {
+  console.log(`[agenda] ${soloNoEnviados ? "Completando" : "Generando"} "${encuesta.name}" (${motivo})`);
+  /* Completar conserva lo ya generado y respondido; generar parte de cero */
+  const resumen = soloNoEnviados ? operaciones.completar(encuesta) : null;
+  const instancias = soloNoEnviados ? [] : operaciones.generar(encuesta);
   let envios = [];
   if (encuesta.channel === "API WhatsApp") {
-    envios = await operaciones.enviar(encuesta);
+    envios = await operaciones.enviar(encuesta, { soloNoEnviados });
   }
   encuesta.schedule.lastRun = operaciones.ahora();
   encuesta.schedule.nextRun = proximaEjecucion(encuesta);
   encuesta.schedule.firstRun = primeraEjecucion(encuesta);
   db.encuestas.guardar(encuesta);
-  console.log(`[agenda] ${instancias.length} encuesta(s) generada(s), ${envios.length} envío(s)`);
-  return { instancias, envios };
+  console.log(`[agenda] ${soloNoEnviados ? `${resumen.agregadas} agregada(s)` : `${instancias.length} encuesta(s) generada(s)`}, ${envios.length} envío(s)`);
+  return { instancias, envios, agregadas: resumen ? resumen.agregadas : instancias.length };
 }
 
 const hora2 = (texto, porDefecto) => String(texto || porDefecto || "07:00").slice(0, 5);

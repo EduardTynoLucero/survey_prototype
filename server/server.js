@@ -362,7 +362,13 @@ async function api(req, res, ruta, consulta) {
 
     if (partes[3] === "ejecutar" && req.method === "POST") {
       const salida = await agenda.ejecutarGeneracion(encuesta, "manual");
-      return json(res, { instancias: salida.instancias.length, envios: salida.envios });
+      return json(res, { instancias: salida.instancias.length, envios: salida.envios, agregadas: salida.agregadas });
+    }
+
+    /* Solo lo que falta: no toca lo ya generado ni lo ya respondido */
+    if (partes[3] === "completar" && req.method === "POST") {
+      const salida = await agenda.ejecutarGeneracion(encuesta, "manual (no enviados)", { soloNoEnviados: true });
+      return json(res, { agregadas: salida.agregadas, envios: salida.envios });
     }
 
     if (partes[3] === "cerrar" && req.method === "POST") {

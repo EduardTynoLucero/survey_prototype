@@ -675,7 +675,6 @@ code {
 }
 
 .dercas-btn.cancel {
-  margin-left: auto;
   color: var(--muted);
 }
 
@@ -683,12 +682,6 @@ code {
   border-color: var(--red);
   background: #fdf3f3;
   color: var(--red);
-}
-
-@media (max-width: 720px) {
-  .dercas-btn.cancel {
-    margin-left: 0;
-  }
 }
 
 /* ===================================================================
@@ -2169,7 +2162,8 @@ code {
 
 /* ---------- Pasos: control segmentado, no cinco tarjetones ---------- */
 .edit-shell .wizard-steps {
-  grid-template-columns: repeat(5, minmax(0, auto));
+  grid-auto-flow: column;
+  grid-template-columns: none;
   justify-content: start;
   gap: 0;
   margin: 0;
@@ -2841,7 +2835,8 @@ code {
   }
 
   .edit-shell .wizard-steps {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-auto-flow: row;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .editor-nombre {
@@ -3235,26 +3230,24 @@ code {
 }
 
 /* Botón de tres puntos */
+/* Solo los tres puntos: sin recuadro ni fondo */
 .dl-kebab {
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 0 0 4px;
-  border: 1px solid var(--ui-border);
-  border-radius: 2px;
-  background: #fff;
-  color: var(--ui-text);
-  font-size: 15px;
+  padding: 0 0 5px;
+  border: 0;
+  background: transparent;
+  color: var(--ui-muted);
+  font-size: 16px;
   line-height: 1;
   cursor: pointer;
 }
 
 .dl-kebab:hover,
 .dl-kebab.on {
-  border-color: var(--ui-primary);
-  background: var(--ui-primary-soft);
   color: var(--ui-primary-dark);
 }
 
@@ -3344,4 +3337,127 @@ code {
 
 .edit-shell .mode-config.compact > div:first-child b {
   font-size: 11px;
+}
+
+/* Cinta de Envíos: solo los dos botones de ejecución */
+.edit-shell .dercas-ribbon.solo-acciones {
+  justify-content: flex-start;
+  border-left-width: 3px;
+}
+
+/* ===================================================================
+   Diálogo de verificación antes de guardar o ejecutar
+   =================================================================== */
+.dl-modal-fondo {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(30, 25, 28, .42);
+}
+
+.dl-modal {
+  width: min(100%, 480px);
+  max-height: calc(100vh - 60px);
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border: 1px solid var(--ui-border);
+  border-top: 3px solid var(--ui-primary);
+  border-radius: 2px;
+  box-shadow: 0 14px 40px rgba(30, 25, 28, .22);
+  overflow: hidden;
+}
+
+.dl-modal-head {
+  padding: 9px 12px;
+  background: var(--ui-toolbar);
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.dl-modal-head b {
+  font-size: 12.5px;
+  line-height: 1.3;
+}
+
+.dl-modal-body {
+  padding: 10px 12px;
+  overflow: auto;
+}
+
+.dl-modal-intro {
+  margin: 0 0 6px;
+  color: var(--ui-muted);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.dl-check {
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+}
+
+.dl-check:last-child {
+  margin-bottom: 0;
+}
+
+.dl-check li {
+  padding: 5px 8px 5px 22px;
+  position: relative;
+  border-radius: 2px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.dl-check li::before {
+  position: absolute;
+  left: 7px;
+  top: 5px;
+  font-weight: 800;
+}
+
+.dl-check.bien li {
+  background: #f2faf5;
+  color: #14603c;
+}
+
+.dl-check.bien li::before {
+  content: "\2713";
+  color: #1d8a57;
+}
+
+.dl-check.aviso li {
+  background: #fdf8ec;
+  color: #7a5405;
+}
+
+.dl-check.aviso li::before {
+  content: "!";
+  color: #b8860b;
+}
+
+.dl-check.mal li {
+  background: #fdf3f3;
+  color: #9d2420;
+}
+
+.dl-check.mal li::before {
+  content: "\00d7";
+  color: #c0392b;
+  font-size: 13px;
+  top: 3px;
+}
+
+.dl-modal-pie {
+  display: flex;
+  gap: 6px;
+  padding: 8px 12px;
+  background: #fcfafb;
+  border-top: 1px solid var(--ui-border-soft);
 }
