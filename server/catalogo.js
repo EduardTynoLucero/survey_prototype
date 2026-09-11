@@ -589,6 +589,19 @@ function nuevaEncuesta(clasificacion = "Externa", extra = {}) {
       whatsappMessage: externa
         ? "Hola {{doctor}}, durante {{periodo}} trabajamos {{casos}} casos para usted. Queremos conocer su experiencia:"
         : "",
+
+      /* Recordatorios a quien recibio la encuesta y todavia no la contesta.
+         Corre como una programacion mas: cada N dias, a una hora, con un
+         tope de recordatorios por persona. */
+      reminders: {
+        active: externa,
+        everyDays: 3,
+        time: "09:00",
+        max: 2,
+        message: externa
+          ? "Hola {{doctor}}, le recordamos que su encuesta de {{periodo}} sigue abierta. Solo le toma un minuto:"
+          : "",
+      },
       periodAuto: true,
       periodLabel: PERIODO.etiqueta,
       period: PERIODO.clave,
@@ -648,7 +661,7 @@ function seccionesInternasDemo(preguntas, area) {
 
 /* Suba este número cuando cambien los datos de demostración:
    el sistema los refresca solo, sin borrar lo que el usuario creó. */
-const VERSION_SEMILLA = 4;
+const VERSION_SEMILLA = 5;
 
 function semilla() {
   const externa = nuevaEncuesta("Externa", {

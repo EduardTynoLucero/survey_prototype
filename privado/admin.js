@@ -633,7 +633,7 @@
   /* Acciones que necesitan la encuesta ya creada en el servidor */
   const REQUIERE_GUARDADA = [
     "sends", "ejecutar-ahora", "ejecutar-ahora-confirmado", "ejecutar-no-enviados",
-    "ejecutar-no-enviados-confirmado", "probar-agenda", "generar", "enviar", "cerrar",
+    "ejecutar-no-enviados-confirmado", "recordar", "recordar-confirmado", "probar-agenda", "generar", "enviar", "cerrar",
     "public-link", "mensaje-instancia",
   ];
 
@@ -1220,6 +1220,34 @@
           });
           return;
 
+        case "recordar":
+          if (!survey) return;
+          pedirConfirmacion({
+            titulo: "¿Enviar el recordatorio ahora?",
+            accion: "recordar-confirmado",
+            etiqueta: "Sí, recordar",
+            survey,
+          });
+          return;
+
+        case "recordar-confirmado": {
+          showToast("Enviando recordatorios…");
+          const salida = await DL.api.recordar(survey.id);
+          state.instancias = await DL.api.instancias(survey.id);
+          renderView();
+          if (salida.motivo) {
+            showToast("No se envió nada: " + salida.motivo + ".");
+            return;
+          }
+          const reales = salida.enviados.filter((item) => item.ok).length;
+          showToast(
+            salida.enviados.length
+              ? `${salida.enviados.length} recordatorio(s)${reales ? "" : " (quedaron en la bitácora: WhatsApp no está conectado)"}.`
+              : "Nadie necesita recordatorio en este momento."
+          );
+          return;
+        }
+
         case "ejecutar-no-enviados":
           if (!survey) return;
           pedirConfirmacion({
@@ -1387,6 +1415,12 @@
       guardar();
       return;
     }
+    if (target.matches("[data-rec-field]")) {
+      state.draft.reminders = state.draft.reminders || {};
+      state.draft.reminders[target.dataset.recField] = target.value;
+      guardar();
+      return;
+    }
     if (target.matches("[data-works-field]")) {
       state.draft.works[target.dataset.worksField] = target.value;
       guardar();
@@ -1501,6 +1535,20 @@
     }
     if (target.matches("[data-sched-check]")) {
       survey.schedule[target.dataset.schedCheck] = target.checked;
+      guardar();
+      renderView();
+      return;
+    }
+    if (target.matches("[data-rec-field]")) {
+      survey.reminders = survey.reminders || {};
+      survey.reminders[target.dataset.recField] = target.value;
+      guardar();
+      renderView();
+      return;
+    }
+    if (target.matches("[data-rec-check]")) {
+      survey.reminders = survey.reminders || {};
+      survey.reminders[target.dataset.recCheck] = target.checked;
       guardar();
       renderView();
       return;
@@ -1787,6 +1835,10 @@
     if (externa && survey.channel === "API WhatsApp" && !String(survey.whatsappMessage || "").trim()) {
       errores.push("El canal es WhatsApp pero el mensaje está vacío.");
     }
+    const rec = survey.reminders || {};
+    if (externa && rec.active !== false && survey.channel === "API WhatsApp" && !String(rec.message || "").trim()) {
+      errores.push("Los recordatorios están activos pero el mensaje del recordatorio está vacío.");
+    }
     if (externa && survey.audienceMode === "Selección manual") {
       if (!(survey.audienceDoctors || []).length) errores.push("No se seleccionó ningún doctor.");
       if (!(survey.works.selectedIds || []).length) errores.push("No se seleccionó ninguna orden.");
@@ -1819,7 +1871,12 @@
         ? `${survey.audienceMode === "Selección manual" ? `${(survey.audienceDoctors || []).length} doctor(es) elegidos` : "todos los doctores del período"} · ${esc(etiquetaPeriodo())}`
         : `área ${survey.areaKey || "—"} · ${(survey.respondents || []).length || "—"} colaborador(es)`,
       `canal ${survey.channel} · repetición ${survey.schedule.repeat}`,
-    ];
+      externa && survey.channel === "API WhatsApp"
+        ? (rec.active !== false
+            ? `recordatorios cada ${Math.max(1, Number(rec.everyDays) || 3)} día(s) a las ${String(rec.time || "09:00").slice(0, 5)}, hasta ${Math.max(1, Number(rec.max) || 2)} por doctor`
+            : "sin recordatorios")
+        : "",
+    ].filter(Boolean);
 
     return { errores, avisos, listo };
   }
@@ -2249,13 +2306,25 @@
     const yaCorrio = instancias.length > 0;
     const sinEnviar = instancias.filter((item) => item.state === "Generada" && !item.sentAt).length;
 
+    /* Recordables: ya recibieron la encuesta y no la han terminado, y
+       todavía no llegaron al tope de recordatorios. */
+    const rec = survey.reminders || {};
+    const tope = Math.max(1, Number(rec.max) || 2);
+    const recordables = instancias.filter(
+      (item) => ["Enviada", "Abierta", "Parcial"].includes(item.state) && Number(item.reminders || 0) < tope
+    ).length;
+    const sinContestar = instancias.filter((item) => ["Enviada", "Abierta", "Parcial"].includes(item.state)).length;
+
     return `
       <div class="dercas-ribbon solo-acciones">
         <div class="ribbon-tags">
           <button class="btn primary" type="button" data-act="ejecutar-ahora">${yaCorrio ? "Volver a ejecutar (todos)" : "Ejecutar primera vez"}</button>
           <button class="btn" type="button" data-act="ejecutar-no-enviados">Ejecutar no enviados${sinEnviar ? ` (${sinEnviar})` : ""}</button>
+          ${externa ? `<button class="btn" type="button" data-act="recordar" ${recordables ? "" : "disabled"}>Recordar a los que no han contestado${recordables ? ` (${recordables})` : ""}</button>` : ""}
         </div>
       </div>
+
+      ${externa && sinContestar && !recordables ? `<p class="empty-note">Los ${sinContestar} que no han contestado ya llegaron al tope de ${tope} recordatorio(s). Puede subir el tope en el paso WhatsApp.</p>` : ""}
 
       ${state.esNueva ? `<p class="empty-note">La encuesta todavía no se ha creado. Guárdela primero y podrá ejecutarla desde aquí.</p>` : ""}
 
@@ -2266,11 +2335,11 @@
             <thead><tr>
               <th>${externa ? "Doctor" : "Colaborador"}</th><th>${externa ? "Clínica" : "Área"}</th>
               ${externa ? "<th>Trabajos</th>" : "<th>Evalúa a</th>"}
-              <th>Estado</th><th>Generada</th><th>Enviada</th><th>Abierta</th><th>Completada</th><th class="dl-col-opts">Acciones</th>
+              <th>Estado</th><th>Generada</th><th>Enviada</th>${externa ? "<th>Recordatorios</th>" : ""}<th>Abierta</th><th>Completada</th><th class="dl-col-opts">Acciones</th>
             </tr></thead>
             <tbody>
               ${instancias.length === 0
-                ? `<tr><td colspan="9">Aún no hay envíos. Pulse <b>Ejecutar primera vez</b>.</td></tr>`
+                ? `<tr><td colspan="${externa ? 10 : 9}">Aún no hay envíos. Pulse <b>Ejecutar primera vez</b>.</td></tr>`
                 : instancias.map((item) => `
                     <tr>
                       <td><b>${esc(item.doctor)}</b> <i>${esc(item.periodLabel)}</i></td>
@@ -2279,6 +2348,9 @@
                       <td><span class="dl-badge ${item.state === "Completada" ? "ok" : String(item.state).startsWith("Cerrada") ? "off" : "warn"}">${esc(item.state)}</span></td>
                       <td>${esc(item.generatedAt || "—")}</td>
                       <td>${esc(item.sentAt || "—")}</td>
+                      ${externa ? `<td>${Number(item.reminders || 0)
+                        ? `<span class="dl-badge warn">${Number(item.reminders)} de ${tope}</span> <i class="tiny">${esc(item.lastReminderAt || "")}</i>`
+                        : "—"}</td>` : ""}
                       <td>${esc(item.openedAt || "—")}</td>
                       <td>${esc(item.finishedAt || "—")}</td>
                       <td class="dl-col-opts">
@@ -2611,12 +2683,60 @@
             <p>${esc(mensajeArmado(survey))}</p>
             <span>+ enlace individual de cada doctor</span>
           </div>` : ""}
+      </section>
+
+      ${survey.channel === "API WhatsApp" ? tarjetaRecordatorios(survey) : ""}`;
+  }
+
+  /* ==================================================================
+     Recordatorios: se le vuelve a escribir a quien recibió la encuesta
+     y todavía no la termina. Tiene su propia programación.
+     ================================================================== */
+  function tarjetaRecordatorios(survey) {
+    const rec = survey.reminders || {};
+    const activo = rec.active !== false;
+    const cada = Math.max(1, Number(rec.everyDays) || 3);
+    const tope = Math.max(1, Number(rec.max) || 2);
+
+    return `
+      <section class="page-card">
+        <h2 class="card-title">Recordatorios
+          <small>${activo
+            ? `Cada ${cada} día(s) a las ${esc(String(rec.time || "09:00").slice(0, 5))}, hasta ${tope} vez(ces) por doctor`
+            : "Desactivados"}</small>
+        </h2>
+        <div class="form-grid g4">
+          <div class="field"><span>Recordatorios</span>
+            <label class="switch-row"><input type="checkbox" data-rec-check="active" ${activo ? "checked" : ""}> Reenviar a quien no ha contestado</label>
+          </div>
+          ${activo ? `
+            <label class="field"><span>Cada cuántos días *</span>
+              <input type="number" min="1" max="30" data-rec-field="everyDays" value="${attr(cada)}">
+            </label>
+            <label class="field"><span>Hora *</span>
+              <input type="time" data-rec-field="time" value="${attr(String(rec.time || "09:00").slice(0, 5))}">
+            </label>
+            <label class="field"><span>Máximo por doctor *</span>
+              <input type="number" min="1" max="10" data-rec-field="max" value="${attr(tope)}">
+            </label>
+            <label class="field span3"><span>Mensaje del recordatorio *</span>
+              <textarea rows="2" data-rec-field="message">${esc(rec.message || "")}</textarea>
+              <small>Mismas variables: <code>{{doctor}}</code> <code>{{periodo}}</code> <code>{{casos}}</code></small>
+            </label>
+          ` : ""}
+        </div>
+        ${activo && String(rec.message || "").trim() ? `
+          <div class="whatsapp-preview">
+            <b>Así llega el recordatorio</b>
+            <p>${esc(mensajeArmado(survey, rec.message))}</p>
+            <span>+ enlace individual de cada doctor</span>
+          </div>` : ""}
       </section>`;
   }
 
-  function mensajeArmado(survey) {
+  function mensajeArmado(survey, plantilla) {
     const alcance = alcancePrevio();
-    return String(survey.whatsappMessage || "")
+    return String(plantilla != null ? plantilla : survey.whatsappMessage || "")
       .replace(/{{doctor}}/g, alcance.doctor || survey.respondent)
       .replace(/{{periodo}}/g, survey.periodLabel)
       .replace(/{{casos}}/g, alcance.works.length)

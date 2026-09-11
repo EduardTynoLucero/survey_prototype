@@ -328,6 +328,12 @@ async function api(req, res, ruta, consulta) {
       }
       if (req.method === "PUT") {
         const actualizada = Object.assign({}, encuesta, cuerpo, { id: encuesta.id });
+        /* La marca de la ultima corrida de recordatorios la pone la agenda,
+           no el navegador: si se guarda sin ella el recordatorio podria
+           repetirse en la misma hora. */
+        actualizada.reminders = Object.assign({}, encuesta.reminders, cuerpo.reminders, {
+          lastMark: (encuesta.reminders || {}).lastMark || "",
+        });
         catalogo.aplicarPeriodoAuto(actualizada);
         sincronizarAgenda(actualizada);
         db.encuestas.guardar(actualizada);
@@ -363,6 +369,19 @@ async function api(req, res, ruta, consulta) {
     if (partes[3] === "ejecutar" && req.method === "POST") {
       const salida = await agenda.ejecutarGeneracion(encuesta, "manual");
       return json(res, { instancias: salida.instancias.length, envios: salida.envios, agregadas: salida.agregadas });
+    }
+
+    /* Recordatorio manual a los que no han contestado */
+    if (partes[3] === "recordar" && req.method === "POST") {
+      const salida = await operaciones.recordar(encuesta, { forzar: true });
+      return json(res, { enviados: salida.enviados || [], motivo: salida.motivo || "" });
+    }
+
+    /* Cuántos esperan recordatorio ahora mismo */
+    if (partes[3] === "recordatorios" && req.method === "GET") {
+      return json(res, {
+        pendientes: operaciones.pendientesDeRecordatorio(encuesta, { forzar: true }).length,
+      });
     }
 
     /* Solo lo que falta: no toca lo ya generado ni lo ya respondido */

@@ -169,6 +169,30 @@ async function revisar() {
       continue;
     }
 
+    /* Recordatorios: su propia programación, cada N días a su hora.
+       Solo dentro de la ventana y solo por WhatsApp. */
+    const rec = encuesta.reminders || {};
+    const horaRec = hora2(rec.time, "09:00");
+    if (
+      rec.active !== false &&
+      encuesta.channel === "API WhatsApp" &&
+      dentroDeVentana &&
+      hora === horaRec &&
+      rec.lastMark !== clave
+    ) {
+      rec.lastMark = clave;
+      encuesta.reminders = rec;
+      db.encuestas.guardar(encuesta);
+      try {
+        const salida = await operaciones.recordar(encuesta);
+        if (salida.enviados.length) {
+          console.log(`[agenda] "${encuesta.name}": ${salida.enviados.length} recordatorio(s)`);
+        }
+      } catch (error) {
+        console.error("[agenda] error al recordar:", error.message);
+      }
+    }
+
     /* Cierre (RN-ENC-006): al terminar la ventana de disponibilidad */
     if (esHoy(prog.endDate) && hora === d.hasta && prog.closeMark !== clave) {
       prog.closeMark = clave;

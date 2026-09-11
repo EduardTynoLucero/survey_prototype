@@ -11,9 +11,9 @@ function ahora() {
   return new Date().toLocaleString("es-GT", { hour12: false });
 }
 
-function armarMensaje(encuesta, instancia) {
+function armarMensaje(encuesta, instancia, plantilla) {
   const casos = instancia ? instancia.workIds.length : encuesta.works.selectedIds.length;
-  const texto = String(encuesta.whatsappMessage || "")
+  const texto = String(plantilla != null ? plantilla : encuesta.whatsappMessage || "")
     .replace(/{{doctor}}/g, (instancia && instancia.doctor) || encuesta.respondent)
     .replace(/{{periodo}}/g, encuesta.periodLabel)
     .replace(/{{casos}}/g, casos)
@@ -59,6 +59,8 @@ function candidatos(encuesta) {
       openedAt: "",
       finishedAt: "",
       answers: null,
+      reminders: 0,
+      lastReminderAt: "",
     }));
     return nuevas;
   }
@@ -78,6 +80,8 @@ function candidatos(encuesta) {
       openedAt: "",
       finishedAt: "",
       answers: null,
+      reminders: 0,
+      lastReminderAt: "",
     };
     return [instancia];
   }
@@ -100,6 +104,8 @@ function candidatos(encuesta) {
     openedAt: "",
     finishedAt: "",
     answers: null,
+    reminders: 0,
+    lastReminderAt: "",
   }));
 
   return nuevas;
@@ -152,6 +158,67 @@ async function enviar(encuesta, { soloNoEnviados = false } = {}) {
     resultados.push({ doctor: instancia.doctor, ...salida });
   }
   return resultados;
+}
+
+/* ==================================================================
+   Recordatorios
+   Le vuelven a escribir a quien ya recibio la encuesta y todavia no la
+   termina. Nunca se le escribe a quien ya contesto ni a quien todavia
+   no recibio el primer envio.
+   ================================================================== */
+const PENDIENTES = ["Enviada", "Abierta", "Parcial"];
+
+function config_recordatorios(encuesta) {
+  const r = encuesta.reminders || {};
+  return {
+    activo: r.active !== false,
+    cadaDias: Math.max(1, Number(r.everyDays) || 3),
+    hora: String(r.time || "09:00").slice(0, 5),
+    tope: Math.max(1, Number(r.max) || 2),
+    mensaje: String(r.message || "").trim(),
+  };
+}
+
+const diasEntre = (desdeISO, hastaISO) => {
+  if (!desdeISO) return Infinity;
+  const a = new Date(desdeISO).getTime();
+  const b = new Date(hastaISO || Date.now()).getTime();
+  if (Number.isNaN(a) || Number.isNaN(b)) return Infinity;
+  return Math.floor((b - a) / 86400000);
+};
+
+/* A quien le toca recordatorio ahora mismo. Con "forzar" se ignora la
+   espera de dias (es el boton manual), pero el tope se respeta igual. */
+function pendientesDeRecordatorio(encuesta, { forzar = false } = {}) {
+  const cfg = config_recordatorios(encuesta);
+  const periodo = periodoDe(encuesta);
+  return db.instancias
+    .listar(encuesta.id)
+    .filter((i) => i.period === periodo)
+    .filter((i) => PENDIENTES.includes(i.state))
+    .filter((i) => Number(i.reminders || 0) < cfg.tope)
+    .filter((i) => forzar || diasEntre(i.lastReminderAt || i.sentAt, null) >= cfg.cadaDias);
+}
+
+async function recordar(encuesta, { forzar = false } = {}) {
+  const cfg = config_recordatorios(encuesta);
+  if (!cfg.mensaje) return { enviados: [], motivo: "sin mensaje de recordatorio" };
+
+  const lista = pendientesDeRecordatorio(encuesta, { forzar });
+  const enviados = [];
+  for (const instancia of lista) {
+    const salida = await whatsapp.enviar(armarMensaje(encuesta, instancia, cfg.mensaje), {
+      tipo: "recordatorio",
+      surveyId: encuesta.id,
+      instanceId: instancia.id,
+      doctor: instancia.doctor,
+    });
+    instancia.reminders = Number(instancia.reminders || 0) + 1;
+    instancia.lastReminderAt = ahora();
+    db.instancias.guardar(instancia);
+    enviados.push({ doctor: instancia.doctor, numero: instancia.reminders, ...salida });
+  }
+  return { enviados };
 }
 
 /* RN-ENC-006 / RN-ENC-007: cierre al terminar la ventana */
@@ -344,6 +411,6 @@ function resultadoDe(id) {
 }
 
 module.exports = {
-  generar, completar, enviar, cerrar, abrir, responder, respuestas, encuestasDeTrabajo,
+  generar, completar, enviar, recordar, pendientesDeRecordatorio, cerrar, abrir, responder, respuestas, encuestasDeTrabajo,
   resultados, resultadoDe, armarMensaje, ahora,
 };
