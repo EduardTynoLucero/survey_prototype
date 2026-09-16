@@ -3461,3 +3461,64 @@ code {
   background: #fcfafb;
   border-top: 1px solid var(--ui-border-soft);
 }
+
+/* ---------- Tres puntos con flecha, un poco más grandes ---------- */
+.dl-kebab {
+  width: auto;
+  height: 24px;
+  gap: 3px;
+  padding: 0 4px 2px;
+  font-size: 18px;
+}
+
+.dl-kebab > i {
+  font-size: 9px;
+  font-style: normal;
+  line-height: 1;
+  transform: translateY(2px);
+}
+
+.editor-tabs .dl-kebab {
+  height: 24px;
+  width: auto;
+}
+
+/* ---------- Reja de tres columnas (paso Programación) ---------- */
+.edit-shell .form-grid.g3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+@media (max-width: 1100px) {
+  .edit-shell .form-grid.g3 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 700px) {
+  .edit-shell .form-grid.g3 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ---------- Teléfono del doctor en la tabla de envíos ---------- */
+.dl-table .wk-tel {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ---------- Tres puntos y flecha, otro paso más grandes ---------- */
+.dl-kebab {
+  height: 28px;
+  gap: 4px;
+  padding: 0 6px 3px;
+  font-size: 24px;
+}
+
+.dl-kebab > i {
+  font-size: 12px;
+  transform: translateY(3px);
+}
+
+.editor-tabs .dl-kebab {
+  height: 28px;
+}

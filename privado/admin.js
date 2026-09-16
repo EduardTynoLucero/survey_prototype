@@ -633,7 +633,7 @@
   /* Acciones que necesitan la encuesta ya creada en el servidor */
   const REQUIERE_GUARDADA = [
     "sends", "ejecutar-ahora", "ejecutar-ahora-confirmado", "ejecutar-no-enviados",
-    "ejecutar-no-enviados-confirmado", "recordar", "recordar-confirmado", "probar-agenda", "generar", "enviar", "cerrar",
+    "ejecutar-no-enviados-confirmado", "recordar", "recordar-confirmado", "generar", "enviar", "cerrar",
     "public-link", "mensaje-instancia",
   ];
 
@@ -1284,16 +1284,6 @@
           return;
         }
 
-        case "probar-agenda": {
-          const input = document.getElementById("minutosPrueba");
-          const minutos = Number(input ? input.value : 2) || 2;
-          const salida = await DL.api.programarPrueba(survey.id, minutos);
-          state.surveys = await DL.api.encuestas();
-          renderView();
-          showToast(`Programado: el JOB correrá solo a las ${new Date(salida.cuando).toLocaleTimeString("es-GT", { hour12: false })}.`);
-          return;
-        }
-
         case "cerrar-ventana": {
           const salida = await DL.api.cerrar(survey.id);
           state.instancias = await DL.api.instancias(survey.id);
@@ -1603,7 +1593,6 @@
       survey.works.selectedIds = target.checked
         ? [...new Set([...survey.works.selectedIds, ...suyas])]
         : survey.works.selectedIds.filter((id) => !suyas.includes(id));
-      if (target.checked) state.openDoctor = doctor;
       guardar();
       renderView();
       refreshPreview();
@@ -1697,8 +1686,9 @@
       campo.disabled = true;
     });
     cuerpo.querySelectorAll("button").forEach((boton) => {
-      /* La vista previa y el enlace público no cambian nada: siguen activos */
-      if (boton.dataset.act === "preview" || boton.dataset.act === "public-link") return;
+      /* Lo que solo mira, no edita, sigue activo en modo consulta:
+         la vista previa, el enlace público y desplegar un doctor. */
+      if (["preview", "public-link", "toggle-doctor"].includes(boton.dataset.act)) return;
       boton.disabled = true;
     });
   }
@@ -2239,7 +2229,7 @@
 
             ${/* Las opciones van pegadas al último tab */ ""}
             <div class="menu-wrap">
-              <button class="dl-kebab ${abierto ? "on" : ""}" type="button" data-menu="editor-opts" title="Más opciones" aria-label="Más opciones">⋯</button>
+              <button class="dl-kebab ${abierto ? "on" : ""}" type="button" data-menu="editor-opts" title="Más opciones" aria-label="Más opciones">⋯<i>▾</i></button>
               ${abierto ? `
                 <div class="menu-pop">
                   ${editando ? "" : `<button type="button" data-act="editar-encuesta">Editar</button>`}
@@ -2335,16 +2325,17 @@
             <thead><tr>
               <th>${externa ? "Doctor" : "Colaborador"}</th><th>${externa ? "Clínica" : "Área"}</th>
               ${externa ? "<th>Trabajos</th>" : "<th>Evalúa a</th>"}
-              <th>Estado</th><th>Generada</th><th>Enviada</th>${externa ? "<th>Recordatorios</th>" : ""}<th>Abierta</th><th>Completada</th><th class="dl-col-opts">Acciones</th>
+              ${externa ? "<th>WhatsApp</th>" : ""}<th>Estado</th><th>Generada</th><th>Enviada</th>${externa ? "<th>Recordatorios</th>" : ""}<th>Abierta</th><th>Completada</th><th class="dl-col-opts">Acciones</th>
             </tr></thead>
             <tbody>
               ${instancias.length === 0
-                ? `<tr><td colspan="${externa ? 10 : 9}">Aún no hay envíos. Pulse <b>Ejecutar primera vez</b>.</td></tr>`
+                ? `<tr><td colspan="${externa ? 11 : 9}">Aún no hay envíos. Pulse <b>Ejecutar primera vez</b>.</td></tr>`
                 : instancias.map((item) => `
                     <tr>
                       <td><b>${esc(item.doctor)}</b> <i>${esc(item.periodLabel)}</i></td>
                       <td>${esc(item.clinic || "—")}</td>
                       <td>${externa ? item.workIds.length : esc(item.supervisor || "—")}</td>
+                      ${externa ? `<td class="wk-tel" title="Dato de muestra: el envío real va al número configurado">${esc(DL.telefono(item.doctorPhone))}</td>` : ""}
                       <td><span class="dl-badge ${item.state === "Completada" ? "ok" : String(item.state).startsWith("Cerrada") ? "off" : "warn"}">${esc(item.state)}</span></td>
                       <td>${esc(item.generatedAt || "—")}</td>
                       <td>${esc(item.sentAt || "—")}</td>
@@ -2531,6 +2522,7 @@
     const doctores = [...new Set(eligible.map((work) => work.doctor))].map((doctor) => ({
       doctor,
       clinic: (eligible.find((work) => work.doctor === doctor) || {}).clinic || "",
+      phone: (eligible.find((work) => work.doctor === doctor) || {}).doctorPhone || "",
       works: eligible.filter((work) => work.doctor === doctor),
     }));
 
@@ -2565,9 +2557,9 @@
                     ${manual
                       ? `<label class="doctor-check">
                           <input type="checkbox" data-doctor-pick="${attr(grupo.doctor)}" ${marcado ? "checked" : ""}>
-                          <span><b>${esc(grupo.doctor)}</b><small>${esc(grupo.clinic)}</small></span>
+                          <span><b>${esc(grupo.doctor)}</b><small>${esc(grupo.clinic)} · WhatsApp ${esc(DL.telefono(grupo.phone))}</small></span>
                         </label>`
-                      : `<span class="doctor-name"><b>${esc(grupo.doctor)}</b><small>${esc(grupo.clinic)}</small></span>`}
+                      : `<span class="doctor-name"><b>${esc(grupo.doctor)}</b><small>${esc(grupo.clinic)} · WhatsApp ${esc(DL.telefono(grupo.phone))}</small></span>`}
                     <button class="mini-btn" type="button" data-act="toggle-doctor" data-arg="${attr(grupo.doctor)}">
                       ${manual ? `${suyas} de ${grupo.works.length} órdenes` : `${grupo.works.length} órdenes`}${abierto ? " · ocultar" : ""}
                     </button>
@@ -2610,21 +2602,15 @@
 
   function stepSchedule() {
     const survey = draft();
-    const external = isExternal();
-    const repite = survey.schedule.repeat !== "No repetir";
-    const prueba = (state.surveys.find((item) => item.id === survey.id) || {})._prueba;
 
+    /* Tres columnas parejas: cada campo ocupa una celda completa, así la
+       fila de arriba y la de abajo quedan alineadas. */
     return `
       <section class="page-card">
         <h2 class="card-title">¿Cada cuánto se ejecuta?</h2>
-        <div class="form-grid g4">
+        <div class="form-grid g3">
           <label class="field"><span>Repetición *</span>
             <select data-sched-field="repeat">${options(["No repetir", "Mensual", "Trimestral", "Anual"], survey.schedule.repeat)}</select>
-            <small>${
-              survey.schedule.repeat === "No repetir"
-                ? "Corre una sola vez, en la fecha y hora de inicio"
-                : `${survey.schedule.repeat === "Mensual" ? "Todos los meses" : survey.schedule.repeat === "Trimestral" ? "Cada 3 meses" : "Una vez al año"} el día ${diaDeInicio(survey)} a las ${horaDeInicio(survey)}`
-            }</small>
           </label>
           <div class="field"><span>Inicio disponibilidad *</span>
             <div class="ventana-fila">
@@ -2640,20 +2626,8 @@
           </div>
 
           <label class="field"><span>Primera ejecución</span><input value="${attr(corridas(survey).primera)}" readonly></label>
-          <label class="field span2"><span>Próxima ejecución</span><input value="${attr(corridas(survey).proxima)}" readonly></label>
-          <label class="field span2"><span>Última ejecución</span><input value="${attr(survey.schedule.lastRun || "—")}" readonly></label>
-        </div>
-
-        <div class="agenda-test">
-          <div><b>${repite ? `Probar la agenda sin esperar al día ${diaDeInicio(survey)}` : "Probar la corrida sin esperar la fecha de inicio"}</b>
-            <span>Programa una corrida real dentro de unos minutos: generará ${external ? "una encuesta por doctor" : "una encuesta por colaborador"}${survey.channel === "API WhatsApp" ? " y las enviará por WhatsApp" : " y dejará listo el enlace de cada persona"}.</span>
-            ${prueba ? `<span class="next">Prueba programada para ${new Date(prueba).toLocaleTimeString("es-GT", { hour12: false })}</span>` : ""}
-          </div>
-          <div class="load-actions">
-            <input id="minutosPrueba" type="number" min="1" max="60" value="2" style="width:70px">
-            <span class="tiny">minutos</span>
-            <button class="btn" type="button" data-act="probar-agenda">Programar prueba</button>
-          </div>
+          <label class="field"><span>Próxima ejecución</span><input value="${attr(corridas(survey).proxima)}" readonly></label>
+          <label class="field"><span>Última ejecución</span><input value="${attr(survey.schedule.lastRun || "—")}" readonly></label>
         </div>
       </section>`;
   }

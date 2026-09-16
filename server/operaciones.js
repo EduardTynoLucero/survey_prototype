@@ -97,6 +97,8 @@ function candidatos(encuesta) {
     periodLabel: encuesta.periodLabel,
     doctor: grupo.doctor,
     clinic: grupo.clinic,
+    /* Visual: el envio real sigue yendo al numero de config.js */
+    doctorPhone: catalogo.telefonoDoctor(grupo.doctor),
     workIds: grupo.works.map((w) => w.id),
     state: "Generada",
     generatedAt: ahora(),

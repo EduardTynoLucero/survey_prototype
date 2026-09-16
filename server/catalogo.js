@@ -133,6 +133,34 @@ function correrFecha(fecha, dias) {
   return `${String(base.getDate()).padStart(2, "0")}/${String(base.getMonth() + 1).padStart(2, "0")}/${base.getFullYear()}`;
 }
 
+/* ------------------------------------------------------------------
+   Telefono de WhatsApp del doctor.
+   MIENTRAS NO ESTE EL ETL esto es solo visual: se deriva del nombre
+   para que cada doctor tenga siempre el mismo numero en pantalla, pero
+   el envio real sigue yendo al numero configurado en server/config.js.
+   Cuando el ETL entregue el telefono de verdad, basta con reemplazar
+   esta funcion por el dato que venga del ERP.
+   ------------------------------------------------------------------ */
+function telefonoDoctor(nombre) {
+  const texto = String(nombre || "").toUpperCase();
+  let h = 2166136261;
+  for (let i = 0; i < texto.length; i += 1) {
+    h ^= texto.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  const n = Math.abs(h);
+  /* Movil de Guatemala: 8 digitos que empiezan en 3, 4 o 5 */
+  const primero = 3 + (n % 3);
+  const resto = String(n % 10000000).padStart(7, "0");
+  return `${primero}${resto}`;
+}
+
+/* "31234567" -> "3123 4567" */
+const telefonoBonito = (numero) => {
+  const d = String(numero || "").replace(/\D/g, "");
+  return d.length === 8 ? `${d.slice(0, 4)} ${d.slice(4)}` : d;
+};
+
 const quetzales = (n) => `${Number(n).toFixed(2)} Q`;
 
 function trabajo(code, box, clinic, doctor, patient, status, product, advisor, dia, atras = 0) {
@@ -162,6 +190,7 @@ function trabajo(code, box, clinic, doctor, patient, status, product, advisor, d
     advisor,
     sent,
     period: dia ? claveDeFecha(sent) : "",
+    doctorPhone: telefonoDoctor(doctor),
 
     /* ---- Ficha completa del trabajo ---- */
     technician: tecnicoIngreso,
@@ -742,4 +771,4 @@ function agruparPorDoctor(estados, rango = {}, filtro = {}) {
   return [...mapa.values()];
 }
 
-module.exports = { AREAS, TRABAJOS, PERIODO, VERSION_SEMILLA, uid, pregunta, seccion, nuevaEncuesta, semilla, agruparPorDoctor, mesAnterior, aplicarPeriodoAuto, aISO, bonita, enRango };
+module.exports = { AREAS, TRABAJOS, PERIODO, VERSION_SEMILLA, telefonoDoctor, telefonoBonito, uid, pregunta, seccion, nuevaEncuesta, semilla, agruparPorDoctor, mesAnterior, aplicarPeriodoAuto, aISO, bonita, enRango };

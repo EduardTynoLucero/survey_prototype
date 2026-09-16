@@ -138,6 +138,13 @@
 
   DL.STATES = ["Generada", "Enviada", "Abierta", "Parcial", "Completada", "Cerrada sin respuesta", "Cerrada parcial"];
 
+  /* Telefono del doctor con formato legible. Hoy es un dato de muestra:
+     cuando el ETL lo entregue, llega igual en work.doctorPhone. */
+  DL.telefono = (numero) => {
+    const d = String(numero || "").replace(/\D/g, "");
+    return d.length === 8 ? `${d.slice(0, 4)} ${d.slice(4)}` : d || "—";
+  };
+
   /* Trabajos cargados desde el servidor */
   DL.WORKS = [];
   DL.findWorks = (ids) => DL.WORKS.filter((work) => (ids || []).includes(work.id));
