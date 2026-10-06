@@ -81,6 +81,9 @@
 
     encuestas: () => pedir("GET", "/api/encuestas"),
     encuesta: (id) => pedir("GET", `/api/encuestas/${id}`),
+    formulario: (id) => pedir("GET", `/api/encuestas/${encodeURIComponent(id)}/formulario`),
+    disponible: (id) => pedir("GET", `/api/encuestas/${encodeURIComponent(id)}/disponible`),
+    responderLibre: (id, nombre, respuestas) => pedir("POST", `/api/encuestas/${encodeURIComponent(id)}/libre`, { nombre, respuestas }),
     plantilla: (classification) => pedir("POST", "/api/plantilla", { classification }),
     crearEncuesta: (classification) => pedir("POST", "/api/encuestas", { classification }),
     crearDesdeBorrador: (encuesta) => pedir("POST", "/api/encuestas", encuesta),
@@ -719,6 +722,10 @@
       const head = screenHeader(screen);
       const percent = Math.round(((state.index + 1) / screens.length) * 100);
 
+      if (state.finished && config.exito) {
+        mount.innerHTML = config.exito;
+        return;
+      }
       if (state.finished) {
         mount.innerHTML = `
           <div class="success">

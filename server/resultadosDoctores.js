@@ -135,12 +135,12 @@ function preguntaDe(encuesta, respuesta) {
 }
 
 /* Respuestas "planas", una fila por pregunta contestada (y por orden o grupo) */
-function filas(encuesta, lista) {
+function filas(encuesta, lista, libre = false) {
   const trabajos = new Map(require("./datosPrueba").todosLosTrabajos().map((t) => [t.id, t]));
   const salida = [];
 
   lista.filter(respondida).forEach((instancia) => {
-    const doctor = partirDoctor(instancia.doctor);
+    const doctor = libre ? { doctorName: instancia.doctor } : partirDoctor(instancia.doctor);
     instancia.answers.forEach((r, indice) => {
       const { seccion, pregunta } = preguntaDe(encuesta, r);
       const tipo = TIPOS[(pregunta && pregunta.type) || r.tipo] || (Number(r.calificacion) > 0 ? "STARS" : "SHORT");
@@ -256,12 +256,43 @@ function porAsesora(rows) {
 function detalle(id) {
   const grupo = grupos().find((g) => idDe(g.encuesta, g.period) === id);
   if (!grupo) return null;
+  return armar(grupo);
+}
+
+/* Formulario libre: todas sus respuestas juntas, sin períodos ni doctores */
+function detalleLibre(encuesta) {
+  const lista = db.instancias.listar(encuesta.id);
+  const salida = armar({ encuesta, period: "libre", lista }, true);
+  const abierto = disponible(encuesta);
+  const prog = encuesta.schedule || {};
+  salida.period.periodLabel = "Formulario libre";
+  salida.period.availableTo = prog.endDate ? `${prog.endDate} ${String(prog.endTime || "23:59").slice(0, 5)}:00` : "";
+  salida.period.status = abierto.ok ? "OPEN" : "CLOSED";
+  salida.period.sentCount = salida.period.completedCount;
+  salida.totals.sent = salida.totals.completed;
+  return salida;
+}
+
+/* ¿Se puede llenar ahora? Activa y dentro de la ventana de disponibilidad */
+function disponible(encuesta) {
+  if (!encuesta || encuesta.status !== "Activa") return { ok: false, motivo: "El formulario no está activo." };
+  const prog = encuesta.schedule || {};
+  const ahora = new Date();
+  const momento = (fecha, horaTxt) => (fecha ? new Date(`${fecha}T${String(horaTxt || "00:00").slice(0, 5)}:00`) : null);
+  const inicio = momento(prog.startDate, prog.startTime || "00:00");
+  const fin = momento(prog.endDate, prog.endTime || "23:59");
+  if (inicio && ahora < inicio) return { ok: false, motivo: "El formulario todavía no está disponible." };
+  if (fin && ahora > fin) return { ok: false, motivo: "El formulario ya no recibe respuestas." };
+  return { ok: true, motivo: "" };
+}
+
+function armar(grupo, libre = false) {
   const { encuesta, lista } = grupo;
   const periodo = resumen(grupo);
-  const rows = filas(encuesta, lista);
+  const rows = filas(encuesta, lista, libre);
 
   const instances = lista.map((instancia) => {
-    const doctor = partirDoctor(instancia.doctor);
+    const doctor = libre ? { doctorPrefix: "", doctorName: instancia.doctor } : partirDoctor(instancia.doctor);
     const notas = respondida(instancia) ? instancia.answers.filter((r) => Number(r.calificacion) > 0).map((r) => Number(r.calificacion)) : [];
     return {
       doctorSurveyInstanceId: instancia.id,
@@ -294,4 +325,4 @@ function detalle(id) {
   };
 }
 
-module.exports = { periodos, detalle, aISO, cierreDe, partirDoctor, preguntaDe };
+module.exports = { periodos, detalle, detalleLibre, disponible, aISO, cierreDe, partirDoctor, preguntaDe };

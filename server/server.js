@@ -453,6 +453,45 @@ async function api(req, res, ruta, consulta) {
     if (partes[3] === "mensaje" && req.method === "GET") {
       return json(res, { texto: operaciones.armarMensaje(encuesta, null) });
     }
+
+    /* ---- Formulario libre: respuestas y llenado por enlace ---- */
+    if (partes[3] === "formulario" && req.method === "GET") {
+      if (!catalogo.esLibre(encuesta)) return json(res, { error: "la encuesta no es un formulario libre" }, 400);
+      return json(res, resultadosDoctores.detalleLibre(encuesta));
+    }
+    if (partes[3] === "disponible" && req.method === "GET") {
+      return json(res, resultadosDoctores.disponible(encuesta));
+    }
+    if (partes[3] === "libre" && req.method === "POST") {
+      if (!catalogo.esLibre(encuesta)) return json(res, { error: "la encuesta no es un formulario libre" }, 400);
+      const puede = resultadosDoctores.disponible(encuesta);
+      if (!puede.ok) return json(res, { error: puede.motivo }, 409);
+      const respuestas = Array.isArray(cuerpo.respuestas) ? cuerpo.respuestas : [];
+      if (!respuestas.length) return json(res, { error: "sin respuestas" }, 400);
+      const cuantas = db.instancias.listar(encuesta.id).length;
+      const nombre = String(cuerpo.nombre || "").trim().slice(0, 120);
+      const cuando = new Date().toLocaleString("es-GT", { hour12: false });
+      const instancia = {
+        id: catalogo.uid("lib"),
+        surveyId: encuesta.id,
+        period: "libre",
+        periodLabel: "Formulario libre",
+        doctor: nombre || `Respuesta ${cuantas + 1}`,
+        clinic: "",
+        employeeId: "",
+        workIds: [],
+        state: "Completada",
+        generatedAt: cuando,
+        sentAt: "",
+        openedAt: cuando,
+        finishedAt: cuando,
+        answers: respuestas,
+        reminders: 0,
+        lastReminderAt: "",
+      };
+      db.instancias.guardar(instancia);
+      return json(res, { ok: true, id: instancia.id }, 201);
+    }
   }
 
   /* ---- instancias ---- */

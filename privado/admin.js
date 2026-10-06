@@ -279,7 +279,7 @@
   /* Primera y próxima corrida, calculadas en pantalla para que se
      actualicen al cambiar la fecha o la hora (el servidor manda igual). */
   const MESES_LARGO = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
-  const SALTO_MESES = { Mensual: 1, Trimestral: 3, Anual: 12 };
+  const SALTO_MESES = { Mensual: 1, "Cada 2 meses": 2, Trimestral: 3, "Cada 4 meses": 4, "Cada 6 meses": 6, Anual: 12 };
 
   const aFecha = (iso) => {
     if (!iso || !String(iso).includes("-")) return null;
@@ -379,7 +379,23 @@
       }
     }
 
+    /* Formulario libre: nadie asignado, se llena con el enlace */
+    if (survey.assignMode === LIBRE) {
+      state.alcanceInterno = { supervisor: "", gente: [], avisos: [], subareas: [] };
+      renderView();
+      return;
+    }
+
     if (survey.assignMode === "Manual") {
+      if (!state.empleadosTodos) {
+        try {
+          state.empleadosTodos = (await DL.api.empleados())
+            .filter((e) => e.active !== false)
+            .sort((a, b) => a.name.localeCompare(b.name, "es"));
+        } catch (error) {
+          state.empleadosTodos = [];
+        }
+      }
       if (!state.empleadosLista.length) {
         try {
           state.empleadosLista = (await DL.api.empleados()).filter((e) => e.active && !e.supervisor);
@@ -392,8 +408,17 @@
       return;
     }
 
+    /* Sin área todavía: no hay supervisor ni respondedores */
+    if (!survey.areaKey) {
+      state.alcanceInterno = { supervisor: "", gente: [], avisos: [], subareas: [] };
+      survey.supervisorName = "";
+      survey.respondents = [];
+      renderView();
+      return;
+    }
+
     try {
-      const alcance = await DL.api.respondedores(survey.areaKey || "GERENCIA GENERAL", survey.assignMode);
+      const alcance = await DL.api.respondedores(survey.areaKey, survey.assignMode);
       state.alcanceInterno = alcance;
       survey.supervisorName = alcance.supervisor;
       const quitados = conservarQuitados ? survey.excluded || [] : [];
@@ -423,6 +448,11 @@
     state.activeQuestionId = state.draft.sections[0].questions[0].id;
     state.openQuestionId = state.activeQuestionId;
     state.alcanceInterno = null;
+    state.intTab = "schedule";
+    state.intAcordeon = false;
+    state.manFiltro = {};
+    state.resDocLibre = false;
+    state.resDocDetalle = null;
     if (state.draft.classification === "Interna") recalcularAlcance();
   }
 
@@ -481,8 +511,16 @@
         items.push(["Doctores seleccionados", (survey.audienceDoctors || []).length > 0]);
         items.push(["Órdenes seleccionadas", survey.works.selectedIds.length > 0]);
       }
+    } else if (survey.assignMode === LIBRE) {
+      items.push(["Ventana de disponibilidad", Boolean(survey.schedule.startDate && survey.schedule.endDate)]);
+    } else if (survey.assignMode === "Manual") {
+      items.push(["Persona a evaluar", Boolean(survey.targetId)]);
+      items.push(["Personas que responderán", (survey.respondents || []).length > 0]);
+      items.push(["Todas las preguntas tienen texto", questions.every((question) => String(question.text || "").trim())]);
     } else {
-      items.push(["Público interno definido", (survey.audienceAreas || []).length > 0]);
+      items.push(["Área", Boolean(survey.areaKey)]);
+      items.push(["Supervisor asignado", Boolean(survey.supervisorName)]);
+      items.push(["Todas las preguntas tienen texto", questions.every((question) => String(question.text || "").trim())]);
     }
     return items;
   }
@@ -674,6 +712,7 @@
 
     try {
       if (await accionDashboard(act, arg)) return;
+      if (await accionInterna(act, arg)) return;
       if (await accionResultados(act, arg)) return;
       if (await accionSeguimiento(act, arg)) return;
       switch (act) {
@@ -735,7 +774,8 @@
           }
           clearTimeout(state.saveTimer);
           survey.status = "Activa";
-          survey.schedule.active = survey.schedule.repeat !== "No repetir";
+          /* En las internas manda el interruptor "Programación activa" */
+          if (survey.classification !== "Interna") survey.schedule.active = survey.schedule.repeat !== "No repetir";
           const guardada = await persistir(survey);
 
           if (act === "crear-y-enviar") {
@@ -747,6 +787,16 @@
             renderApp();
             iniciarPoll("sends");
             showToast(`Encuesta creada y enviada: ${salida.instancias} encuesta(s), ${salida.envios.length} envío(s).`);
+            return;
+          }
+
+          /* El formulario libre se queda abierto: lo siguiente es compartir su enlace */
+          if (esLibre(guardada)) {
+            state.surveys = await DL.api.encuestas();
+            abrirBorrador(guardada);
+            state.view = "survey-edit";
+            renderApp();
+            showToast("Formulario creado. Copie el enlace para compartirlo.");
             return;
           }
 
@@ -1425,6 +1475,7 @@
     if (cambioDashboard(target, true)) return;
     if (cambioResultados(target, true)) return;
     if (cambioSeguimiento(target, true)) return;
+    if (cambioInterno(target, true)) return;
 
     /* Los filtros de los listados viven fuera del editor */
     if (target.matches("[data-filtro]")) {
@@ -1503,6 +1554,7 @@
     if (cambioDashboard(target, false)) return;
     if (cambioResultados(target, false)) return;
     if (cambioSeguimiento(target, false)) return;
+    if (cambioInterno(target, false)) return;
 
     if (target.matches("[data-filtro]")) {
       filtrosEnc()[target.dataset.filtro] = target.value;
@@ -1544,7 +1596,18 @@
       survey[target.dataset.surveyField] = target.value;
       if (target.dataset.surveyField === "assignMode") {
         survey.excluded = [];
-        if (target.value === "Manual") survey.respondents = [];
+        if (target.value === "Manual" || target.value === LIBRE) {
+          survey.respondents = [];
+          survey.targetId = "";
+          survey.supervisorName = "";
+        }
+        /* El formulario libre no se relaciona con órdenes ni se envía por WhatsApp */
+        if (target.value === LIBRE) {
+          survey.channel = "Enlace directo";
+          survey.works.enabled = false;
+          survey.sections.forEach((section) => { section.useWorks = false; });
+        }
+        state.alcanceInterno = null;
       }
       guardar();
       recalcularAlcance({ conservarQuitados: target.dataset.surveyField === "areaKey" ? false : true });
@@ -1909,7 +1972,7 @@
       if (!(survey.audienceDoctors || []).length) errores.push("No se seleccionó ningún doctor.");
       if (!(survey.works.selectedIds || []).length) errores.push("No se seleccionó ninguna orden.");
     }
-    if (!externa && !survey.areaKey) errores.push("La encuesta interna no tiene área asignada.");
+    if (!externa && !survey.areaKey && !["Manual", LIBRE].includes(survey.assignMode)) errores.push("La encuesta interna no tiene área asignada.");
 
     /* Avisos: se puede guardar igual, pero conviene saberlo */
     const sinTitulo = preguntas.filter((q) => /^pregunta sin t[íi]tulo$/i.test(String(q.text || "").trim())).length;
@@ -1925,9 +1988,12 @@
     if (externa) {
       const doctores = [...new Set(elegibles().map((w) => w.doctor))].length;
       if (!doctores) avisos.push(`El período ${etiquetaPeriodo()} no tiene órdenes enviadas: no se generaría ninguna encuesta.`);
-    } else {
+    } else if (survey.assignMode !== LIBRE) {
       const cuantos = (survey.respondents || []).length || ((state.alcanceInterno && state.alcanceInterno.gente) || []).length;
       if (!cuantos) avisos.push("No hay colaboradores que respondan esta encuesta.");
+      const sinTexto = preguntas.filter((q) => !String(q.text || "").trim()).length;
+      if (sinTexto) errores.push(`${sinTexto} pregunta(s) no tienen texto.`);
+      if (survey.assignMode === "Manual" && !survey.targetId) errores.push("No se seleccionó a la persona a evaluar.");
     }
 
     /* Lo que sí está listo, para que el usuario lo vea de un vistazo */
@@ -1935,8 +2001,14 @@
       `${secciones.length} categoría(s) y ${preguntas.length} pregunta(s)`,
       externa
         ? `${survey.audienceMode === "Selección manual" ? `${(survey.audienceDoctors || []).length} doctor(es) elegidos` : "todos los doctores del período"} · ${esc(etiquetaPeriodo())}`
-        : `área ${survey.areaKey || "—"} · ${(survey.respondents || []).length || "—"} colaborador(es)`,
-      `canal ${survey.channel} · repetición ${survey.schedule.repeat}`,
+        : survey.assignMode === LIBRE
+          ? "formulario libre · lo llena cualquiera con el enlace, no evalúa a nadie"
+          : survey.assignMode === "Manual"
+            ? `evalúa a ${survey.supervisorName || "—"} · ${(survey.respondents || []).length} respondedor(es)`
+            : `área ${survey.areaKey || "—"} · ${(survey.respondents || []).length || "—"} colaborador(es)`,
+      survey.assignMode === LIBRE
+        ? `disponible del ${survey.schedule.startDate || "—"} al ${survey.schedule.endDate || "—"}`
+        : `canal ${survey.channel} · repetición ${survey.schedule.repeat}`,
       externa && survey.channel === "API WhatsApp"
         ? (rec.active !== false
             ? `recordatorios cada ${Math.max(1, Number(rec.everyDays) || 3)} día(s) a las ${String(rec.time || "09:00").slice(0, 5)}, hasta ${Math.max(1, Number(rec.max) || 2)} por doctor`
@@ -2243,11 +2315,13 @@
                   const respondidas = survey._respondidas || 0;
                   return `
                     <tr class="dl-row-link" data-row-open="edit" data-row-arg="${esc(survey.id)}" title="Abrir la encuesta">
-                      <td><b>${esc(survey.name)}</b> <i>${esc(survey.subtype)} · ${survey.sections.length} cat · ${preguntas} preg</i></td>
+                      <td><b>${esc(survey.name)}</b> <i>${esc(esLibre(survey) ? "Formulario libre" : survey.subtype)} · ${survey.sections.length} cat · ${preguntas} preg</i></td>
                       <td><span class="dl-badge ${externa ? "pink" : ""}">${esc(survey.classification)}</span></td>
-                      <td>${esc(survey.respondent)}</td>
-                      <td>${esc(survey.schedule.repeat)}${survey.schedule.repeat === "No repetir" ? "" : ` · día ${esc(survey.schedule.generationDay)} ${esc(survey.schedule.time)} → cierra ${esc(survey.schedule.closeDay)}`}</td>
-                      <td>${esc(survey._proxima || "—")}</td>
+                      <td>${esc(esLibre(survey) ? "Cualquiera con el enlace" : survey.respondent)}</td>
+                      ${esLibre(survey)
+                        ? `<td>Disponible hasta ${esc(survey.schedule.endDate || "—")} ${esc(String(survey.schedule.endTime || "").slice(0, 5))}</td><td>—</td>`
+                        : `<td>${esc(survey.schedule.repeat)}${survey.schedule.repeat === "No repetir" ? "" : ` · día ${esc(survey.schedule.generationDay)} ${esc(survey.schedule.time)} → cierra ${esc(survey.schedule.closeDay)}`}</td>
+                      <td>${esc(survey._proxima || "—")}</td>`}
                       <td>${survey._instancias || 0}</td>
                       <td><span class="dl-badge ${survey.status === "Activa" ? "ok" : survey.status === "Inactiva" ? "off" : "warn"}">${esc(survey.status.toUpperCase())}</span></td>
                       <td class="dl-col-opts">
@@ -2279,7 +2353,800 @@
     ["envios", "Envíos"],
   ];
 
+  /* ==================================================================
+     Encuesta INTERNA: misma pantalla del sistema
+     (Nueva Encuesta · Programación · Preguntas).
+     Lo único nuevo es el modo "Formulario libre": se llena con un enlace,
+     no evalúa a nadie y usa el editor de preguntas de las externas.
+     ================================================================== */
+  const LIBRE = "Formulario libre";
+  const esLibre = (survey) => Boolean(survey && survey.classification === "Interna" && survey.assignMode === LIBRE);
+  const MODOS_INTERNOS = [
+    ["Por supervisor", "Por supervisor"],
+    ["Por supervisor sin encargados", "Por supervisor sin encargados"],
+    ["Manual", "Manual"],
+    [LIBRE, "Formulario libre (sin evaluar a nadie)"],
+  ];
+  const FRECUENCIAS = [
+    ["Mensual", "Todos los meses"],
+    ["Cada 2 meses", "Cada 2 meses"],
+    ["Trimestral", "Cada 3 meses"],
+    ["Cada 4 meses", "Cada 4 meses"],
+    ["Cada 6 meses", "Cada 6 meses"],
+    ["Anual", "Cada 12 meses"],
+  ];
+  const ICO_STF = {
+    file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/>',
+    calendar: '<path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/><path d="M8 14h.01"/><path d="M12 14h.01"/><path d="M16 14h.01"/><path d="M8 18h.01"/><path d="M12 18h.01"/><path d="M16 18h.01"/>',
+    users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+    back: '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
+    plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
+    trash: '<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>',
+    up: '<path d="m18 15-6-6-6 6"/>',
+    down: '<path d="m6 9 6 6 6-6"/>',
+    right: '<path d="m9 18 6-6-6-6"/>',
+    x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+    save: '<path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/>',
+    link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+    copy: '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
+    open: '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
+    chart: '<path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/>',
+  };
+  const icoStf = (nombre, tam = 16) =>
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${tam}" height="${tam}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICO_STF[nombre] || ""}</svg>`;
+
+  const opcionesPar = (lista, actual) =>
+    lista.map(([valor, texto]) => `<option value="${attr(valor)}" ${valor === actual ? "selected" : ""}>${esc(texto)}</option>`).join("");
+
+  const respuestasDe = (survey) =>
+    state.resDocLibre && state.resDocDetalle
+      ? (state.resDocDetalle.totals || {}).completed || 0
+      : ((state.surveys || []).find((x) => x.id === survey.id) || {})._respondidas || 0;
+
+  const enlaceFormulario = (survey) => `${window.location.origin}/doctor/index.html?f=${encodeURIComponent(survey.id)}`;
+
+  /* Las preguntas de la tabla son todas las de la encuesta, en orden */
+  const preguntasInternas = (survey) =>
+    (survey.sections || []).flatMap((section) => (section.questions || []).map((question) => ({ section, question })));
+
+  function horaPicker(campo, valor, dis) {
+    const [hh, mm] = String(valor || "07:00").slice(0, 5).split(":");
+    const horas = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, "0"));
+    const minutos = Array.from({ length: 60 }, (_, i) => String(i).padStart(2, "0"));
+    return `
+      <div class="mk-ios-time-picker">
+        <select data-sched-hora="${campo}:h" ${dis} aria-label="Hora">${horas.map((h) => `<option ${h === hh ? "selected" : ""}>${h}</option>`).join("")}</select>
+        <span>:</span>
+        <select data-sched-hora="${campo}:m" ${dis} aria-label="Minutos">${minutos.map((m) => `<option ${m === mm ? "selected" : ""}>${m}</option>`).join("")}</select>
+      </div>`;
+  }
+
+  function renderEditorInterno() {
+    const survey = draft();
+    const editando = state.editando;
+    const libre = esLibre(survey);
+    const tab = state.intTab || "schedule";
+    const titulo = state.esNueva ? "Nueva Encuesta" : editando ? "Editar Encuesta" : "Detalle de Encuesta";
+    const subtitulo = state.esNueva
+      ? ""
+      : editando
+        ? "Modifica los datos generales, preguntas y programación."
+        : "Consulta la información general, preguntas y programación.";
+    const respondidas = respuestasDe(survey);
+
+    const tabs = [
+      ["schedule", "calendar", "Programación"],
+      ["general", "file", "Preguntas"],
+      ...(libre ? [["respuestas", "chart", "Respuestas"]] : []),
+    ];
+
+    let cuerpo;
+    if (tab === "respuestas" && libre) cuerpo = renderFormularioRespuestas();
+    else if (tab === "general") cuerpo = libre ? preguntasLibres() : preguntasInternasTabla();
+    else cuerpo = programacionInterna();
+
+    return `
+      <div class="stf-page ${editando ? "" : "is-readonly"}">
+        <div class="stf-tabs">
+          <div class="stf-tabs-list" role="tablist">
+            <span class="stf-tab-title" title="${attr(subtitulo)}">${titulo}</span>
+            ${tabs.map(([id, icono, texto]) => `
+              <button type="button" role="tab" aria-selected="${tab === id}" class="stf-tab ${tab === id ? "is-active" : ""}" data-act="int-tab" data-arg="${id}">
+                ${icoStf(icono)} ${texto}${id === "respuestas" && respondidas ? ` <i class="stf-tab-count">${respondidas}</i>` : ""}
+              </button>`).join("")}
+          </div>
+          <div class="stf-tabs-actions">
+            <button type="button" class="stf-tab-action" data-view="survey-list">${icoStf("back")} Regresar</button>
+            ${!state.esNueva && !editando ? `<button type="button" class="stf-tab-action stf-tab-action--primary" data-act="editar-encuesta">Editar</button>` : ""}
+            ${!state.esNueva && editando ? `
+              <button type="button" class="stf-tab-action" data-act="cancelar">Cancelar</button>
+              <button type="button" class="stf-tab-action stf-tab-action--primary" data-act="crear-encuesta">Guardar cambios</button>` : ""}
+          </div>
+        </div>
+
+        <div class="stf-main">${cuerpo}</div>
+
+        ${tab === "respuestas" ? "" : `
+          <div class="stf-form-actions">
+            <div class="stf-form-actions__inner">
+              <div class="stf-form-actions__meta">
+                <span>Completa datos, preguntas y programación ${editando ? "para guardar la encuesta." : "para consultar la encuesta."}</span>
+              </div>
+              <div class="stf-actions">
+                <button type="button" class="stf-btn stf-btn--ghost" ${editando ? `data-act="cancelar"` : `data-view="survey-list"`}>${icoStf("x")} Cancelar</button>
+                ${editando ? `<button type="button" class="stf-btn stf-btn--primary" data-act="crear-encuesta">${icoStf("save")} ${state.esNueva ? (libre ? "Crear formulario" : "Crear encuesta") : "Guardar cambios"}</button>` : ""}
+              </div>
+            </div>
+          </div>`}
+      </div>`;
+  }
+
+  /* ---- Tab Programación: datos generales, programación y asignación ---- */
+  function programacionInterna() {
+    const survey = draft();
+    const dis = state.editando ? "" : "disabled";
+    const libre = esLibre(survey);
+    const supervisores = ["Por supervisor", "Por supervisor sin encargados"].includes(survey.assignMode);
+    const alcance = state.alcanceInterno;
+    const arbol = DL.AREAS_ARBOL || [];
+    const prog = survey.schedule || {};
+    const hoy = new Date().toISOString().slice(0, 10);
+    const runs = corridas(survey);
+    const supervisor = (alcance && alcance.supervisor) || survey.supervisorName || "";
+
+    const datos = `
+      <section class="stf-card">
+        <div class="stf-card__head">
+          <div class="stf-card__icon">${icoStf("file", 18)}</div>
+          <div><h2>Datos generales</h2></div>
+        </div>
+        <div class="stf-general-grid stf-general-grid--survey">
+          <div class="stf-field stf-field--survey-name">
+            <label for="template_name">Nombre de la Encuesta *</label>
+            <input id="template_name" type="text" maxlength="200" data-survey-field="name" value="${attr(survey.name)}" ${dis}
+              placeholder="${libre ? "Ej: Inscripción a la actividad de fin de año" : "Ej: Evaluación de supervisor de producción"}">
+          </div>
+          <div class="stf-field stf-field--survey-mode">
+            <label>${state.esNueva ? "Modo de asignación *" : "Modo de asignación"}</label>
+            ${state.esNueva
+              ? `<select data-survey-field="assignMode" ${dis}>${opcionesPar(MODOS_INTERNOS, survey.assignMode)}</select>`
+              : `<div class="stf-readonly-text">${esc((MODOS_INTERNOS.find(([v]) => v === survey.assignMode) || [, survey.assignMode])[1])}</div>`}
+          </div>
+          <div class="stf-field stf-field--survey-description">
+            <label for="template_description">Descripción de la Encuesta</label>
+            <textarea id="template_description" rows="3" maxlength="1000" data-survey-field="description" ${dis}
+              placeholder="Describe el objetivo, motivo o contexto de esta encuesta">${esc(survey.description)}</textarea>
+          </div>
+          ${supervisores ? `
+            <div class="stf-field">
+              <label for="template_area">Área *</label>
+              <select id="template_area" data-survey-field="areaKey" ${dis}>
+                <option value="">Selecciona un área</option>
+                ${arbol.map((item) => `<option value="${attr(item.area)}" ${item.area === survey.areaKey ? "selected" : ""}>${esc(item.etiqueta)}</option>`).join("")}
+              </select>
+            </div>
+            <div class="stf-field">
+              <label>Supervisor asignado *</label>
+              <select ${!survey.areaKey ? "disabled" : dis}>
+                ${!survey.areaKey
+                  ? `<option value="">Selecciona un área primero</option>`
+                  : alcance === null
+                    ? `<option value="">Cargando supervisores...</option>`
+                    : supervisor
+                      ? `<option selected>${esc(supervisor)}</option>`
+                      : `<option value="">Selecciona un supervisor</option>`}
+              </select>
+            </div>` : ""}
+          ${libre ? `
+            <div class="stf-field stf-field--survey-suggestions">
+              <div class="stf-setting-row">
+                <div class="stf-setting-row__copy">
+                  <strong>Pedir nombre</strong>
+                  <span>Quien llene el formulario escribe su nombre. Si está apagado, las respuestas son anónimas.</span>
+                </div>
+                <span class="stf-switch ${survey.anonymous === false ? "is-checked" : ""}">
+                  <input type="checkbox" data-int-nombre ${survey.anonymous === false ? "checked" : ""} ${dis}>
+                  <span class="stf-switch__track"></span>
+                </span>
+              </div>
+            </div>` : `
+            <div class="stf-field stf-field--survey-suggestions">
+              <div class="stf-setting-row">
+                <div class="stf-setting-row__copy">
+                  <strong>Sugerencias</strong>
+                  <span>Activa el comentario general al final de la encuesta.</span>
+                </div>
+                <span class="stf-switch ${survey.suggestions !== false ? "is-checked" : ""}">
+                  <input type="checkbox" data-survey-check="suggestions" ${survey.suggestions !== false ? "checked" : ""} ${dis}>
+                  <span class="stf-switch__track"></span>
+                </span>
+              </div>
+            </div>`}
+        </div>
+      </section>`;
+
+    const programacion = `
+      <section class="stf-card">
+        <div class="stf-card__head">
+          <div class="stf-card__icon">${icoStf("calendar", 18)}</div>
+          <div><h2>${libre ? "Disponibilidad" : "Programación"}</h2></div>
+        </div>
+        <div class="stf-schedule-grid">
+          ${libre ? "" : `
+            <div class="stf-field stf-field--span-3">
+              <label>Frecuencia en meses *</label>
+              <select data-sched-field="repeat" ${dis}>${opcionesPar(FRECUENCIAS, prog.repeat)}</select>
+            </div>
+            <div class="stf-field stf-field--span-3 stf-field--switch-offset">
+              <label class="stf-switch-row stf-switch-row--compact">
+                <span>Programación activa</span>
+                <span class="stf-switch ${prog.active !== false ? "is-checked" : ""}">
+                  <input type="checkbox" data-sched-check="active" ${prog.active !== false ? "checked" : ""} ${dis}>
+                  <span class="stf-switch__track"></span>
+                </span>
+              </label>
+            </div>`}
+          <div class="stf-field stf-field--span-3">
+            <label>Inicio disponibilidad *</label>
+            <div class="stf-dual-input stf-dual-input--date">
+              <input type="date" min="${hoy}" data-sched-field="startDate" value="${attr(prog.startDate || "")}" ${dis}>
+              ${horaPicker("startTime", prog.startTime || "07:00", dis)}
+            </div>
+          </div>
+          <div class="stf-field stf-field--span-3">
+            <label>Fin disponibilidad *</label>
+            <div class="stf-dual-input stf-dual-input--date">
+              <input type="date" min="${hoy}" data-sched-field="endDate" value="${attr(prog.endDate || "")}" ${dis}>
+              ${horaPicker("endTime", prog.endTime || "23:59", dis)}
+            </div>
+          </div>
+          <div class="stf-field stf-field--span-6">
+            <label>Esquema de asignación</label>
+            <div class="stf-readonly-text">${
+              libre
+                ? "Cualquier persona con el enlace puede llenarlo mientras esté disponible. No se evalúa a nadie ni se relaciona con órdenes."
+                : supervisores
+                  ? "La encuesta se asignará automáticamente según supervisor y subordinados."
+                  : "La encuesta se asignará manualmente seleccionando evaluado y respondedores."
+            }</div>
+          </div>
+          ${libre ? "" : `
+            <div class="stf-field stf-field--span-3">
+              <label>Primera ejecución</label>
+              <div class="stf-readonly-text">${esc(runs.primera || "—")}</div>
+            </div>
+            <div class="stf-field stf-field--span-3">
+              <label>Próxima ejecución</label>
+              <div class="stf-readonly-text">${esc(runs.proxima || "—")}</div>
+            </div>`}
+        </div>
+      </section>`;
+
+    let asignacion;
+    if (libre) asignacion = enlaceLibre(survey);
+    else if (supervisores) asignacion = asignacionSupervisor(survey, supervisor);
+    else asignacion = asignacionManual(survey);
+
+    return datos + programacion + asignacion;
+  }
+
+  function asignacionSupervisor(survey, supervisor) {
+    const alcance = state.alcanceInterno;
+    const fuera = survey.excluded || [];
+    const gente = (alcance ? alcance.gente : []).filter((g) => !fuera.includes(g.id));
+    const cargando = survey.areaKey && alcance === null;
+    const abierto = state.intAcordeon;
+
+    return `
+      <section class="stf-assignment-box">
+        <div class="stf-assignment-box__head"><h3>Asignación automática por supervisor</h3></div>
+        <div class="stf-assignment-grid">
+          <div class="stf-field">
+            <label>Supervisor asignado</label>
+            <div class="stf-readonly-text">${esc(survey.areaKey ? supervisor || "—" : "—")}</div>
+          </div>
+          <div class="stf-assignment-summary">
+            <div class="stf-assignment-pill">
+              <span class="stf-assignment-pill__label">Evaluado</span>
+              <span class="stf-assignment-pill__value">${esc(survey.areaKey ? supervisor || "—" : "—")}</span>
+            </div>
+            <div class="stf-assignment-pill">
+              <span class="stf-assignment-pill__label">Respondedores</span>
+              <span class="stf-assignment-pill__value">${cargando ? "Cargando..." : `${survey.areaKey ? gente.length : 0} colaborador(es)`}</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="stf-accordion-card stf-accordion-card--assignment">
+        <button type="button" class="stf-accordion-card__head ${abierto ? "is-open" : ""}" data-act="int-acordeon">
+          <div class="stf-accordion-card__left">
+            <div class="stf-accordion-card__title">Personas que responderán la encuesta</div>
+            <div class="stf-accordion-card__subtitle">${cargando ? "Cargando..." : `${survey.areaKey ? gente.length : 0} registro(s)`}</div>
+          </div>
+          <span class="stf-accordion-card__icon">${icoStf("right", 18)}</span>
+        </button>
+        ${abierto ? `
+          <div class="stf-accordion-card__body">
+            <div class="stf-datatable stf-datatable--responders">
+              ${(survey.areaKey && alcance ? alcance.avisos : []).map((aviso) => `<div class="stf-warning-box">${esc(aviso)}</div>`).join("")}
+              <div class="stf-datatable__head stf-datatable__head--responders">
+                <div>Nombre</div><div>Puesto</div><div>Área</div><div>Correo</div><div>Acciones</div>
+              </div>
+              ${survey.areaKey && gente.length
+                ? gente.map((emp) => `
+                  <div class="stf-datatable__row stf-datatable__row--responders">
+                    <div class="stf-datatable__cell"><div class="stf-cell-readonly">${esc(emp.name)}</div></div>
+                    <div class="stf-datatable__cell"><div class="stf-cell-readonly">${esc(emp.position || "—")}</div></div>
+                    <div class="stf-datatable__cell"><div class="stf-cell-readonly">${esc(emp.area || "—")}</div></div>
+                    <div class="stf-datatable__cell"><div class="stf-cell-readonly">${esc(emp.email || "—")}</div></div>
+                    <div class="stf-datatable__cell">
+                      ${state.editando ? `<button type="button" class="stf-icon-btn danger" data-act="quitar-resp" data-arg="${attr(emp.id)}" title="Quitar de respondedores">${icoStf("trash", 14)}</button>` : ""}
+                    </div>
+                  </div>`).join("")
+                : `<div class="stf-datatable__empty">${cargando ? "Cargando colaboradores..." : "No hay colaboradores para este supervisor."}</div>`}
+            </div>
+          </div>` : ""}
+      </section>`;
+  }
+
+  /* Selector con tabla (Persona a evaluar / Personas que responderán) */
+  function selectorEmpleados({ clave, titulo, items, elegidos, unico }) {
+    const filtro = (state.manFiltro = state.manFiltro || {})[clave] || { buscar: "", area: "" };
+    const areas = [...new Set(items.map((e) => e.area || "Sin área"))].sort((a, b) => a.localeCompare(b, "es"));
+    const termino = filtro.buscar.trim().toLowerCase();
+    const visibles = items.filter((e) => {
+      const texto = [e.name, e.position, e.area, e.email].filter(Boolean).join(" ").toLowerCase();
+      return (!termino || texto.includes(termino)) && (!filtro.area || (e.area || "Sin área") === filtro.area);
+    });
+    const dis = state.editando ? "" : "disabled";
+    const visiblesElegidos = visibles.filter((e) => elegidos.includes(e.id)).length;
+    const cargando = !state.empleadosTodos;
+
+    return `
+      <div class="stf-field">
+        <label>${esc(titulo)}</label>
+        <div class="stf-manual-table">
+          <div class="stf-manual-table__toolbar">
+            <div class="stf-manual-table__filters">
+              <input type="text" class="stf-manual-table__search" id="manBuscar-${clave}" data-man-buscar="${clave}" value="${attr(filtro.buscar)}"
+                placeholder="Buscar por nombre, puesto, área o correo" ${dis}>
+              <select class="stf-manual-table__area-filter" data-man-area="${clave}" ${dis}>
+                <option value="">Todas las áreas</option>
+                ${areas.map((a) => `<option ${a === filtro.area ? "selected" : ""}>${esc(a)}</option>`).join("")}
+              </select>
+            </div>
+            <div class="stf-manual-table__actions">
+              <button type="button" class="stf-btn stf-btn--ghost stf-mini-btn" data-act="man-todos" data-arg="${clave}"
+                ${dis || !visibles.length || (!unico && visiblesElegidos === visibles.length) ? "disabled" : ""}>Añadir todos</button>
+              <button type="button" class="stf-btn stf-btn--ghost stf-mini-btn" data-act="man-vaciar" data-arg="${clave}" ${dis || !elegidos.length ? "disabled" : ""}>Vaciar</button>
+            </div>
+          </div>
+          <div class="stf-manual-table__summary">
+            <span>Total: ${items.length}</span>
+            <span>Filtrados: ${visibles.length}</span>
+            <span>Seleccionados: ${elegidos.length}</span>
+            <span>${unico ? "Modo: único" : `Seleccionados visibles: ${visiblesElegidos}`}</span>
+          </div>
+          <div class="stf-manual-table__grid">
+            <div class="stf-manual-table__head"><div>Sel.</div><div>Empleado</div><div>Puesto</div><div>Área</div><div>Correo</div></div>
+            <div class="stf-manual-table__body">
+              ${cargando
+                ? `<div class="stf-manual-table__empty">Cargando empleados...</div>`
+                : !visibles.length
+                  ? `<div class="stf-manual-table__empty">No hay empleados disponibles.</div>`
+                  : visibles.map((e) => {
+                      const marcado = elegidos.includes(e.id);
+                      return `
+                        <label class="stf-manual-table__row ${marcado ? "is-selected" : ""}">
+                          <div><input type="${unico ? "radio" : "checkbox"}" name="man-${clave}" data-man-pick="${clave}" value="${attr(e.id)}" ${marcado ? "checked" : ""} ${dis}></div>
+                          <div class="stf-manual-table__employee"><strong>${esc(e.name)}</strong></div>
+                          <div>${esc(e.position || "—")}</div>
+                          <div>${esc(e.area || "—")}</div>
+                          <div>${esc(e.email || "—")}</div>
+                        </label>`;
+                    }).join("")}
+            </div>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function asignacionManual(survey) {
+    const todos = state.empleadosTodos || [];
+    const objetivo = survey.targetId || "";
+    const candidatos = todos.filter((e) => e.id !== objetivo);
+    const evaluados = todos.filter((e) => e.id === objetivo);
+    const respondedores = todos.filter((e) => (survey.respondents || []).includes(e.id));
+    const tarjeta = (lista, vacio, primario) => `
+      <div class="stf-selection-card">
+        ${lista.length
+          ? `<div class="stf-selection-card__list">${lista.map((e) => `<div class="stf-selection-card__item ${primario ? "is-primary" : ""}"><div class="stf-selection-card__name">${esc(e.name)}</div></div>`).join("")}</div>`
+          : `<div class="stf-selection-card__empty">${vacio}</div>`}
+      </div>`;
+
+    return `
+      <section class="stf-card">
+        <div class="stf-card__head">
+          <div class="stf-card__icon">${icoStf("users", 18)}</div>
+          <div><h2>Asignación manual</h2></div>
+        </div>
+        <div class="stf-general-grid">
+          ${selectorEmpleados({ clave: "t", titulo: "Persona a evaluar *", items: todos, elegidos: objetivo ? [objetivo] : [], unico: true })}
+          ${selectorEmpleados({ clave: "r", titulo: "Personas que responderán *", items: candidatos, elegidos: survey.respondents || [], unico: false })}
+          <div class="stf-field stf-field--full">
+            <div class="stf-manual-summary-grid">
+              <div class="stf-assignment-pill"><span class="stf-assignment-pill__label">Evaluado</span><span class="stf-assignment-pill__value">${evaluados.length}</span></div>
+              <div class="stf-assignment-pill"><span class="stf-assignment-pill__label">Respondedores</span><span class="stf-assignment-pill__value">${respondedores.length}</span></div>
+              <div class="stf-assignment-pill"><span class="stf-assignment-pill__label">Asignaciones esperadas</span><span class="stf-assignment-pill__value">${evaluados.length * respondedores.length}</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="stf-card">
+        <div class="stf-card__head">
+          <div class="stf-card__icon">${icoStf("users", 18)}</div>
+          <div><h2>Resumen manual</h2></div>
+        </div>
+        <div class="stf-general-grid">
+          <div class="stf-field"><label>Persona a evaluar</label>${tarjeta(evaluados, "No has seleccionado a la persona evaluada.", true)}</div>
+          <div class="stf-field"><label>Personas que responderán</label>${tarjeta(respondedores, "No has seleccionado respondedores.", false)}</div>
+        </div>
+      </section>`;
+  }
+
+  /* Formulario libre: en lugar de asignación, el enlace para compartir */
+  function enlaceLibre(survey) {
+    const listo = !state.esNueva && survey.status === "Activa";
+    const url = enlaceFormulario(survey);
+    return `
+      <section class="stf-assignment-box stf-libre-box">
+        <div class="stf-assignment-box__head"><h3>${icoStf("link", 16)} Enlace para responder</h3></div>
+        ${listo ? `
+          <div class="stf-libre-link">
+            <input type="text" readonly value="${attr(url)}" id="libreUrl" aria-label="Enlace del formulario">
+            <button type="button" class="stf-btn stf-btn--secondary" data-act="libre-copiar">${icoStf("copy", 15)} Copiar enlace</button>
+            <a class="stf-btn stf-btn--ghost" href="${attr(url)}" target="_blank" rel="noopener">${icoStf("open", 15)} Abrir formulario</a>
+          </div>` : `
+          <div class="stf-readonly-text">${state.esNueva
+            ? "El enlace aparece aquí en cuanto se crea el formulario."
+            : "El formulario está en borrador o inactivo: actívelo para que el enlace reciba respuestas."}</div>`}
+        <div class="stf-assignment-summary">
+          <div class="stf-assignment-pill"><span class="stf-assignment-pill__label">Evaluado</span><span class="stf-assignment-pill__value">Nadie</span></div>
+          <div class="stf-assignment-pill"><span class="stf-assignment-pill__label">Responde</span><span class="stf-assignment-pill__value">Cualquiera con el enlace</span></div>
+          <div class="stf-assignment-pill"><span class="stf-assignment-pill__label">Respuestas</span><span class="stf-assignment-pill__value">${respuestasDe(survey)}</span></div>
+        </div>
+      </section>`;
+  }
+
+  /* ---- Tab Preguntas: tabla del sistema ---- */
+  function preguntasInternasTabla() {
+    const survey = draft();
+    const ro = !state.editando;
+    const primera = (survey.sections || [])[0] || {};
+    const instruccion = primera.description || "";
+    const lista = preguntasInternas(survey);
+    const mini = (q, campo) => ro
+      ? (q[campo] ? "Sí" : "No")
+      : `<label class="stf-mini-switch ${q[campo] ? "is-checked" : ""}"><input type="checkbox" data-iq-check="${attr(q.id)}:${campo}" ${q[campo] ? "checked" : ""}><span></span></label>`;
+
+    return `
+      <section class="stf-card">
+        <div class="stf-card__head">
+          <div class="stf-card__icon">${icoStf("file", 18)}</div>
+          <div><h2>Preguntas</h2></div>
+        </div>
+
+        <div class="stf-question-instruction">
+          <div class="stf-question-instruction__head">
+            <div>
+              <label for="template_instruction">Instrucción general</label>
+              <span>Instrucciones de la respuestas.</span>
+            </div>
+            <span class="stf-question-instruction__counter" id="intInstrCount">${instruccion.length}/1000</span>
+          </div>
+          <textarea id="template_instruction" rows="3" maxlength="1000" data-int-instr ${ro ? "disabled" : ""}
+            placeholder="Ej: Responde considerando el desempeño observado durante el periodo evaluado.">${esc(instruccion)}</textarea>
+        </div>
+
+        <div class="stf-datatable">
+          <div class="stf-datatable__head stf-datatable__head--questions">
+            <div>Pregunta</div><div>Mejora</div><div>Justificación</div><div>Acciones</div>
+          </div>
+          ${lista.map(({ question: q }, index) => `
+            <div class="stf-datatable__row stf-datatable__row--questions">
+              <div class="stf-datatable__cell stf-datatable__cell--question">
+                ${ro
+                  ? `<div class="stf-cell-readonly">${index + 1}. ${esc(q.text || "—")}</div>`
+                  : `<input type="text" class="stf-inline-input" data-iq-text="${attr(q.id)}" value="${attr(q.text)}" placeholder="Pregunta ${index + 1}">`}
+              </div>
+              <div class="stf-datatable__cell stf-datatable__cell--toggle">${mini(q, "lowOptionsRequired")}</div>
+              <div class="stf-datatable__cell stf-datatable__cell--toggle">${mini(q, "lowCommentRequired")}</div>
+              <div class="stf-datatable__cell stf-datatable__cell--actions">
+                ${ro ? `<span class="stf-readonly-dash">—</span>` : `
+                  <div class="stf-row-actions">
+                    <button type="button" class="stf-icon-btn" data-act="iq-mover" data-arg="${attr(q.id)}:-1" ${index === 0 ? "disabled" : ""}>${icoStf("up", 14)}</button>
+                    <button type="button" class="stf-icon-btn" data-act="iq-mover" data-arg="${attr(q.id)}:1" ${index === lista.length - 1 ? "disabled" : ""}>${icoStf("down", 14)}</button>
+                    <button type="button" class="stf-icon-btn danger" data-act="iq-quitar" data-arg="${attr(q.id)}">${icoStf("trash", 14)}</button>
+                  </div>`}
+              </div>
+            </div>`).join("")}
+          ${lista.length ? "" : `<div class="stf-datatable__empty">No hay preguntas registradas.</div>`}
+        </div>
+
+        ${ro ? "" : `
+          <div class="stf-bottom-actions">
+            <button type="button" class="stf-btn stf-btn--secondary" data-act="iq-agregar">${icoStf("plus")} Añadir pregunta</button>
+          </div>`}
+      </section>`;
+  }
+
+  /* ---- Formulario libre: el mismo editor de preguntas de las externas ---- */
+  function preguntasLibres() {
+    return `<div class="edit-shell stf-libre-editor ${state.editando ? "" : "modo-consulta"}"><div class="edit-body">${stepQuestions()}</div></div>`;
+  }
+
+  /* ---- Formulario libre: respuestas al estilo de un formulario ---- */
+  const TABS_LIBRE = [["summary", "Resumen"], ["question", "Pregunta"], ["person", "Individual"]];
+
+  function renderFormularioRespuestas() {
+    const survey = draft();
+    if (state.esNueva) return `<section class="stf-card"><p class="dsv-rs-none">Cree el formulario para empezar a recibir respuestas.</p></section>`;
+    const detalle = state.resDocLibre ? state.resDocDetalle : null;
+    const tab = state.resDocTab || "summary";
+    const secciones = detalle ? modeloDoctores(detalle) : [];
+    const preguntas = secciones.flatMap((s) => s.questions);
+    const personas = detalle ? respondieron(detalle) : [];
+    const periodo = (detalle && detalle.period) || {};
+    const cuantas = personas.length;
+    const estado = periodo.status === "OPEN"
+      ? (periodo.availableTo ? `recibe respuestas hasta el ${fmtFechaHora(periodo.availableTo)}` : "recibe respuestas")
+      : "no recibe respuestas";
+
+    let cuerpo;
+    if (!detalle) cuerpo = `<p class="dsv-rs-none">Cargando respuestas…</p>`;
+    else if (tab === "table") cuerpo = vistaTabla(detalle);
+    else if (tab === "question") cuerpo = vistaPregunta(preguntas);
+    else if (tab === "person") cuerpo = vistaIndividual(detalle, secciones, personas);
+    else cuerpo = vistaResumen(detalle, secciones);
+
+    return `
+      <div class="dsv-page">
+        <div class="dsv-rs dsv-rs-detail">
+          <section class="dsv-rs-card dsv-rs-head">
+            <div class="dsv-rs-head-top">
+              <div>
+                <small class="dsv-rs-eyebrow">${esc(survey.name)} · Formulario libre</small>
+                <h2>${plural(cuantas, "respuesta", "respuestas")}</h2>
+                <p class="dsv-rs-sub">${estado}${survey.status === "Activa" ? ` · <button type="button" class="dsv-rs-link is-small" data-act="libre-copiar">Copiar enlace</button>` : ""}</p>
+              </div>
+              <button type="button" class="dsv-rs-link" data-act="doc-tab" data-arg="${tab === "table" ? "summary" : "table"}">${ico("sheet", 15)} ${tab === "table" ? "Volver al detalle" : "Ver en tabla"}</button>
+            </div>
+            <div class="dsv-rs-tabs" role="tablist">
+              ${TABS_LIBRE.map(([clave, nombre]) => `<button type="button" role="tab" aria-selected="${tab === clave}" class="${tab === clave ? "is-active" : ""}" data-act="doc-tab" data-arg="${clave}">${nombre}</button>`).join("")}
+            </div>
+          </section>
+          ${cuerpo}
+        </div>
+      </div>`;
+  }
+
+  async function cargarFormulario(id) {
+    state.resDocLibre = true;
+    state.resDocDetalle = null;
+    renderView();
+    try {
+      state.resDocDetalle = await DL.api.formulario(id);
+    } catch (error) {
+      showToast(error.message);
+    }
+    if (state.view === "survey-edit") renderView();
+  }
+
+  /* Acciones del editor interno */
+  async function accionInterna(act, arg) {
+    const survey = state.draft;
+    switch (act) {
+      case "int-tab":
+        state.intTab = arg;
+        if (arg === "respuestas" && survey && !state.esNueva) {
+          state.resDocTab = "summary";
+          state.resDocPregunta = "";
+          state.resDocPersona = "";
+          state.resDocComentarios = {};
+          state.resDocMas = {};
+          await cargarFormulario(survey.id);
+          return true;
+        }
+        renderView();
+        return true;
+      case "int-acordeon":
+        state.intAcordeon = !state.intAcordeon;
+        renderView();
+        return true;
+      case "libre-copiar": {
+        const url = enlaceFormulario(survey || {});
+        try {
+          await navigator.clipboard.writeText(url);
+          showToast("Enlace copiado.");
+        } catch (error) {
+          const campo = document.getElementById("libreUrl");
+          if (campo) campo.select();
+          showToast("Copie el enlace: " + url);
+        }
+        return true;
+      }
+      case "iq-agregar": {
+        if (!survey) return true;
+        if (!survey.sections.length) survey.sections.push({ id: DL.uid ? DL.uid("sec") : `sec-${Date.now()}`, title: "Preguntas", description: "", active: true, useWorks: false, allowedModes: [], allowCaseDimensions: false, next: "submit", questions: [] });
+        const base = DL.blankQuestion ? DL.blankQuestion() : {};
+        const seccion = survey.sections[survey.sections.length - 1];
+        seccion.questions.push(Object.assign({}, base, {
+          id: `q-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+          text: "",
+          type: "stars",
+          area: "Recursos Humanos",
+          required: true,
+          active: true,
+          lowThreshold: 4,
+          lowOptionsRequired: false,
+          lowCommentRequired: false,
+        }));
+        guardar();
+        renderView();
+        const campos = document.querySelectorAll("[data-iq-text]");
+        if (campos.length) campos[campos.length - 1].focus();
+        return true;
+      }
+      case "iq-quitar": {
+        if (!survey) return true;
+        survey.sections.forEach((s) => { s.questions = s.questions.filter((q) => q.id !== arg); });
+        guardar();
+        renderView();
+        return true;
+      }
+      case "iq-mover": {
+        if (!survey) return true;
+        const [id, paso] = String(arg).split(":");
+        const lista = preguntasInternas(survey);
+        const i = lista.findIndex((x) => x.question.id === id);
+        const j = i + Number(paso);
+        if (i < 0 || j < 0 || j >= lista.length) return true;
+        const a = lista[i];
+        const b = lista[j];
+        const ia = a.section.questions.indexOf(a.question);
+        const ib = b.section.questions.indexOf(b.question);
+        a.section.questions[ia] = b.question;
+        b.section.questions[ib] = a.question;
+        guardar();
+        renderView();
+        return true;
+      }
+      case "man-todos":
+      case "man-vaciar": {
+        if (!survey) return true;
+        const todos = state.empleadosTodos || [];
+        const filtro = ((state.manFiltro = state.manFiltro || {})[arg]) || { buscar: "", area: "" };
+        const termino = filtro.buscar.trim().toLowerCase();
+        const base = arg === "t" ? todos : todos.filter((e) => e.id !== survey.targetId);
+        const visibles = base.filter((e) => {
+          const texto = [e.name, e.position, e.area, e.email].filter(Boolean).join(" ").toLowerCase();
+          return (!termino || texto.includes(termino)) && (!filtro.area || (e.area || "Sin área") === filtro.area);
+        });
+        if (arg === "t") {
+          survey.targetId = act === "man-todos" && visibles.length ? visibles[0].id : "";
+          fijarEvaluado(survey);
+        } else if (act === "man-todos") {
+          survey.respondents = [...new Set([...(survey.respondents || []), ...visibles.map((e) => e.id)])];
+        } else {
+          survey.respondents = [];
+        }
+        guardar();
+        renderView();
+        return true;
+      }
+      default:
+        return false;
+    }
+  }
+
+  function fijarEvaluado(survey) {
+    const persona = (state.empleadosTodos || []).find((e) => e.id === survey.targetId);
+    survey.supervisorName = persona ? persona.name : "";
+    survey.respondents = (survey.respondents || []).filter((id) => id !== survey.targetId);
+  }
+
+  /* Cambios de los controles propios del editor interno */
+  function cambioInterno(target, escribiendo) {
+    const survey = state.draft;
+    if (!survey) return false;
+    if (target.matches("[data-man-buscar]")) {
+      const clave = target.dataset.manBuscar;
+      state.manFiltro = state.manFiltro || {};
+      state.manFiltro[clave] = Object.assign({ buscar: "", area: "" }, state.manFiltro[clave], { buscar: target.value });
+      if (escribiendo) {
+        renderView();
+        const campo = document.getElementById(`manBuscar-${clave}`);
+        if (campo) {
+          campo.focus();
+          campo.setSelectionRange(campo.value.length, campo.value.length);
+        }
+      }
+      return true;
+    }
+    if (escribiendo && target.matches("[data-iq-text]")) {
+      const item = preguntasInternas(survey).find((x) => x.question.id === target.dataset.iqText);
+      if (item) item.question.text = target.value;
+      guardar();
+      return true;
+    }
+    if (escribiendo && target.matches("[data-int-instr]")) {
+      if (survey.sections[0]) survey.sections[0].description = target.value;
+      const contador = document.getElementById("intInstrCount");
+      if (contador) contador.textContent = `${target.value.length}/1000`;
+      guardar();
+      return true;
+    }
+    if (escribiendo) return false;
+
+    if (target.matches("[data-man-area]")) {
+      const clave = target.dataset.manArea;
+      state.manFiltro = state.manFiltro || {};
+      state.manFiltro[clave] = Object.assign({ buscar: "", area: "" }, state.manFiltro[clave], { area: target.value });
+      renderView();
+      return true;
+    }
+    if (target.matches("[data-man-pick]")) {
+      const id = target.value;
+      if (target.dataset.manPick === "t") {
+        survey.targetId = id;
+        fijarEvaluado(survey);
+      } else {
+        const lista = new Set(survey.respondents || []);
+        if (target.checked) lista.add(id);
+        else lista.delete(id);
+        survey.respondents = [...lista];
+      }
+      guardar();
+      renderView();
+      return true;
+    }
+    if (target.matches("[data-iq-check]")) {
+      const [id, campo] = target.dataset.iqCheck.split(":");
+      const item = preguntasInternas(survey).find((x) => x.question.id === id);
+      if (item) item.question[campo] = target.checked;
+      guardar();
+      renderView();
+      return true;
+    }
+    /* Textos libres: ya se guardaron al escribir. Volver a pintar aquí
+       borraría el foco del campo al que el usuario está pasando. */
+    if (target.matches("[data-iq-text], [data-int-instr]")) return true;
+    if (target.matches("#template_name, #template_description")) {
+      survey[target.dataset.surveyField] = target.value;
+      guardar();
+      return true;
+    }
+    if (target.matches("[data-int-nombre]")) {
+      survey.anonymous = !target.checked;
+      guardar();
+      renderView();
+      return true;
+    }
+    if (target.matches("[data-sched-hora]")) {
+      const [campo, parte] = target.dataset.schedHora.split(":");
+      const [hh, mm] = String(survey.schedule[campo] || "07:00").slice(0, 5).split(":");
+      survey.schedule[campo] = parte === "h" ? `${target.value}:${mm || "00"}` : `${hh || "07"}:${target.value}`;
+      guardar();
+      renderView();
+      return true;
+    }
+    return false;
+  }
+
   function renderEditor() {
+    if (draft().classification === "Interna") return renderEditorInterno();
     const survey = draft();
     const editando = state.editando;
 
@@ -2844,6 +3711,7 @@
 
   function sectionBehavior(section) {
     const survey = draft();
+    if (esLibre(survey)) return "";
     if (!survey.works.enabled) {
       return `<div class="forms-card section-behavior compact-behavior"><b>Sin órdenes de trabajo</b></div>`;
     }
@@ -2909,7 +3777,7 @@
 
   function answerControl(question) {
     if (question.type === "stars")
-      return `<div class="answer-preview"><div class="stars-line"><span>★</span><span>★</span><span>★</span><span>☆</span><span>☆</span><small>El doctor califica de 1 a 5 estrellas</small></div></div>`;
+      return `<div class="answer-preview"><div class="stars-line"><span>★</span><span>★</span><span>★</span><span>☆</span><span>☆</span><small>${esLibre(draft()) ? "Quien responde califica" : "El doctor califica"} de 1 a 5 estrellas</small></div></div>`;
     if (question.type === "short") return `<div class="answer-preview"><div class="short-placeholder">Texto de respuesta corta</div></div>`;
     if (question.type === "paragraph") return `<div class="answer-preview"><div class="paragraph-placeholder">Texto de respuesta larga</div></div>`;
     const marker = question.type === "multiple" ? "check-dot" : "radio-dot";
@@ -2957,14 +3825,14 @@
             </label>
             <label class="check-row"><input type="checkbox" data-question-check="lowOptionsRequired" ${question.lowOptionsRequired ? "checked" : ""}> Exigir al menos un motivo de mejora</label>
             <label class="check-row"><input type="checkbox" data-question-check="lowCommentRequired" ${question.lowCommentRequired ? "checked" : ""}> Exigir comentario obligatorio</label>
-            <label class="field"><span>Pregunta que verá el doctor</span><input data-question-field="lowPrompt" value="${attr(question.lowPrompt)}"></label>
+            <label class="field"><span>Pregunta que verá ${esLibre(draft()) ? "quien responde" : "el doctor"}</span><input data-question-field="lowPrompt" value="${attr(question.lowPrompt)}"></label>
             ${catalogEditor(question, "improvementOptions", "Catálogo de oportunidades de mejora")}
           </section>
           <section class="rule-box positive-rule">
             <header><span>${question.lowThreshold || 4} a 5 ★</span><b>Qué pasa con una nota alta</b></header>
             <label class="check-row"><input type="checkbox" data-question-check="highOptionsOptional" ${question.highOptionsOptional ? "checked" : ""}> Mostrar aspectos valorados (opcional)</label>
             <label class="check-row"><input type="checkbox" data-question-check="highCommentOptional" ${question.highCommentOptional ? "checked" : ""}> Permitir comentario opcional</label>
-            <label class="field"><span>Pregunta que verá el doctor</span><input data-question-field="highPrompt" value="${attr(question.highPrompt)}"></label>
+            <label class="field"><span>Pregunta que verá ${esLibre(draft()) ? "quien responde" : "el doctor"}</span><input data-question-field="highPrompt" value="${attr(question.highPrompt)}"></label>
             ${catalogEditor(question, "valueOptions", "Catálogo de aspectos valorados")}
           </section>
         </div>`
@@ -2975,14 +3843,14 @@
         <h3>Reglas de la pregunta</h3>
         <div class="motor-grid">
           <label class="field"><span>Área responsable *</span><select data-question-field="area">${options(DL.AREAS, question.area)}</select><small>Esa área verá esta respuesta en Resultados.</small></label>
-          <label class="field"><span>Aplicación a trabajos</span>
+          ${esLibre(draft()) ? "" : `<label class="field"><span>Aplicación a trabajos</span>
             <select data-question-field="workMode">
               ${(conTrabajos ? Object.entries(DL.WORK_MODES) : [["none", DL.WORK_MODES.none]])
                 .map(([value, label]) => `<option value="${value}" ${question.workMode === value ? "selected" : ""}>${label}</option>`)
                 .join("")}
             </select>
             <small>${question.workMode === "none" ? "Queda como percepción general del área." : "Conserva la relación orden → asesora."}</small>
-          </label>
+          </label>`}
           ${starRules}
         </div>
       </div>`;
@@ -3891,8 +4759,8 @@ npm start</pre>` : ""}
   function tabsResultados(activa) {
     if (!esAdmin()) return "";
     const items = [
-      ["internas", "Resultados Encuestas"],
-      ["doctores", "Resultados encuestas a doctores"],
+      ["internas", "Internas"],
+      ["doctores", "Externas"],
     ];
     return `
       <div class="nav-group-tabs" role="tablist" aria-label="Opciones">
@@ -4564,6 +5432,9 @@ npm start</pre>` : ""}
       </article>`;
   }
 
+  /* Las mismas vistas sirven para el formulario libre, sin lo de doctores */
+  const enLibre = () => state.view === "survey-edit" && state.resDocLibre;
+
   function vistaResumen(detalle, secciones) {
     const totales = detalle.totals || {};
     const enviadas = totales.sent || totales.instances || 0;
@@ -4581,14 +5452,17 @@ npm start</pre>` : ""}
       <section class="dsv-rs-card">
         <h3 class="dsv-rs-title">Estadísticas</h3>
         <div class="dsv-rs-tiles">
-          <div><b>Enviadas</b><span>${enviadas}</span></div>
-          <div><b>Respondidas</b><span>${totales.completed || 0} <small>(${pctRes(totales.completed || 0, enviadas)}%)</small></span></div>
+          ${enLibre() ? `
+            <div><b>Respuestas</b><span>${totales.completed || 0}</span></div>
+            <div><b>Calificaciones</b><span>${total}</span></div>` : `
+            <div><b>Enviadas</b><span>${enviadas}</span></div>
+            <div><b>Respondidas</b><span>${totales.completed || 0} <small>(${pctRes(totales.completed || 0, enviadas)}%)</small></span></div>`}
           <div><b>Promedio general</b><span>${fmtProm(promedio)} <small>/ 5</small></span></div>
         </div>
         ${total > 0 ? `<p class="dsv-rs-charttitle">Distribución de las calificaciones</p>${columnas(dist, total)}` : ""}
       </section>
 
-      ${(detalle.areas || []).length ? `
+      ${(detalle.areas || []).length && !enLibre() ? `
         <section class="dsv-rs-card">
           <h3 class="dsv-rs-title">Por área responsable</h3>
           <table class="dsv-rs-mini">
@@ -4606,7 +5480,7 @@ npm start</pre>` : ""}
           </table>
         </section>` : ""}
 
-      ${(detalle.advisors || []).length ? `
+      ${(detalle.advisors || []).length && !enLibre() ? `
         <section class="dsv-rs-card">
           <h3 class="dsv-rs-title">Por asesora <small>solo respuestas ligadas a órdenes</small></h3>
           <table class="dsv-rs-mini">
@@ -4683,6 +5557,10 @@ npm start</pre>` : ""}
         </div>
         <h2>${esc(encuesta.name || "Encuesta")}</h2>
         ${encuesta.description ? `<p class="dsv-rs-formtop-desc">${esc(encuesta.description)}</p>` : ""}
+        ${enLibre() ? `
+        <dl class="dsv-rs-facts">
+          <div><dt>Respondió</dt><dd>${esc(doctorTxt(p))}</dd></div>
+        </dl>` : `
         <dl class="dsv-rs-facts">
           <div><dt>Doctor</dt><dd>${esc(doctorTxt(p))}</dd></div>
           <div><dt>Período evaluado</dt><dd>${esc((detalle.period || {}).periodLabel || "—")}</dd></div>
@@ -4693,7 +5571,7 @@ npm start</pre>` : ""}
         <div class="seg-enlaces">
           <button class="dl-mini on" type="button" data-act="seg-detalle" data-arg="${attr(p.key)}">Ver detalle por orden</button>
           <button class="dl-mini" type="button" data-act="seg-historico" data-arg="${attr(p.doctorName || "")}">Ver histórico del doctor</button>
-        </div>
+        </div>`}
       </section>
       ${secciones.map((sec) => {
         const filasSec = sec.questions.flatMap(propias);
@@ -4747,7 +5625,7 @@ npm start</pre>` : ""}
           <div class="dl-tabs-actions" style="justify-content:flex-end;padding:6px 8px"><button type="button" class="dl-tab-action" data-act="doc-exportar">${ico("download")} Exportar Excel</button></div>
           <div class="dl-table-wrap">
             <table class="dl-table">
-              <thead><tr><th>Doctor</th><th>Categoría</th><th>Pregunta</th><th>Área</th><th>Calificación</th><th>Nivel</th><th>Órdenes</th><th>Asesora</th><th>Motivos</th><th>Comentario</th><th>Fecha</th></tr></thead>
+              <thead><tr><th>${enLibre() ? "Respondió" : "Doctor"}</th><th>Categoría</th><th>Pregunta</th><th>Área</th><th>Calificación</th><th>Nivel</th><th>Órdenes</th><th>Asesora</th><th>Motivos</th><th>Comentario</th><th>Fecha</th></tr></thead>
               <tbody>
                 ${rows.length === 0 ? `<tr><td colspan="11">Todavía no hay respuestas.</td></tr>` : rows.map((r) => `
                   <tr>
@@ -4874,37 +5752,38 @@ npm start</pre>` : ""}
       if (p.averageScore !== null && p.averageScore !== undefined) suma += Number(p.averageScore) * (p.completedCount || 0);
     });
     const promedio = completas ? suma / completas : null;
+    const abiertos = Boolean(state.resDocFiltrosAbiertos);
+    const activos = (termino ? 1 : 0) + (filtro ? 1 : 0);
 
     return `
       ${tabsResultados("doctores")}
       <div class="dsv-page">
         <div class="dsv-rs">
-          <div class="dsv-rs-listhead">
-            <div>
-              <h2>Encuestas enviadas</h2>
-              <p class="dsv-rs-sub">Clic en una encuesta para ver sus respuestas con detalle.</p>
+          <div class="svy-gmrst__filters">
+            <div class="svy-gmrst__filter-toolbar">
+              <button type="button" class="svy-gmrst__filter-toggle ${abiertos ? "is-open" : ""}" data-act="doc-filtros" aria-expanded="${abiertos}">
+                ${ico("sliders")}
+                <span>${abiertos ? "Ocultar filtros" : "Ver filtros"}</span>
+                ${activos ? `<span class="svy-gmrst__filter-count">${activos}</span>` : ""}
+                ${ico("down", 14).replace("<svg ", '<svg class="svy-gmrst__filter-chevron" ')}
+              </button>
+              ${activos ? `<button type="button" class="svy-gmrst__filter-clear" data-act="doc-limpiar">${ico("x", 13)} Borrar filtros</button>` : ""}
+              ${abiertos ? `
+                <div class="svy-gmrst__inline-filters">
+                  <div class="svy-gmrst__filter-field">
+                    <label>Buscar</label>
+                    <input type="text" id="docBuscar" data-doc-buscar placeholder="Encuesta o período" value="${attr(state.resDocBuscar || "")}">
+                  </div>
+                  ${encuestas.length > 1 ? `
+                    <div class="svy-gmrst__filter-field">
+                      <label>Encuesta</label>
+                      <select data-doc-select="encuesta">
+                        <option value="">Todas</option>
+                        ${encuestas.map(([id, nombre]) => `<option value="${attr(id)}" ${String(filtro) === String(id) ? "selected" : ""}>${esc(nombre)}</option>`).join("")}
+                      </select>
+                    </div>` : ""}
+                </div>` : ""}
             </div>
-            <div class="dsv-rs-listtools">
-              <label class="dsv-rs-filter">
-                <span>Buscar</span>
-                <input type="text" id="docBuscar" data-doc-buscar placeholder="Encuesta o período" value="${attr(state.resDocBuscar || "")}">
-              </label>
-            ${encuestas.length > 1 ? `
-              <label class="dsv-rs-filter">
-                <span>Encuesta</span>
-                <select data-doc-select="encuesta">
-                  <option value="">Todas</option>
-                  ${encuestas.map(([id, nombre]) => `<option value="${attr(id)}" ${String(filtro) === String(id) ? "selected" : ""}>${esc(nombre)}</option>`).join("")}
-                </select>
-              </label>` : ""}
-            </div>
-          </div>
-
-          <div class="dsv-rs-tiles is-list">
-            <div><b>Encuestas enviadas</b><span>${visibles.length}</span></div>
-            <div><b>Doctores</b><span>${enviadas}</span></div>
-            <div><b>Respondidas</b><span>${completas} <small>(${pctRes(completas, enviadas)}%)</small></span></div>
-            <div><b>Promedio</b><span>${fmtProm(promedio)} <small>/ 5</small></span></div>
           </div>
 
           <section class="dsv-rs-card is-flush">
@@ -4939,6 +5818,13 @@ npm start</pre>` : ""}
               ${paginador(pagina, paginas, "data-doc-pagina")}
             </div>
           </section>
+
+          <div class="dsv-rs-tiles is-list">
+            <div><b>Encuestas enviadas</b><span>${visibles.length}</span></div>
+            <div><b>Doctores</b><span>${enviadas}</span></div>
+            <div><b>Respondidas</b><span>${completas} <small>(${pctRes(completas, enviadas)}%)</small></span></div>
+            <div><b>Promedio</b><span>${fmtProm(promedio)} <small>/ 5</small></span></div>
+          </div>
         </div>
         </div>
       </div>`;
@@ -5983,6 +6869,16 @@ npm start</pre>` : ""}
         if (state.view === "doctor-result") renderView();
         return true;
       }
+      case "doc-filtros":
+        state.resDocFiltrosAbiertos = !state.resDocFiltrosAbiertos;
+        renderView();
+        return true;
+      case "doc-limpiar":
+        state.resDocBuscar = "";
+        state.resDocFiltro = "";
+        state.resDocPagina = 1;
+        renderView();
+        return true;
       case "doc-volver":
         state.resDoc = null;
         state.resDocDetalle = null;

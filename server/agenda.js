@@ -27,7 +27,7 @@ const MESES = [
   "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
 ];
 
-const MESES_POR_REPETICION = { Mensual: 1, Trimestral: 3, Anual: 12 };
+const MESES_POR_REPETICION = { Mensual: 1, "Cada 2 meses": 2, Trimestral: 3, "Cada 4 meses": 4, "Cada 6 meses": 6, Anual: 12 };
 
 function aFecha(iso) {
   if (!iso || !String(iso).includes("-")) return null;
@@ -140,6 +140,8 @@ async function revisar() {
     const prog = encuesta.schedule || {};
     const d = derivar(encuesta);
     if (!d.activa) continue;
+    /* El formulario libre no se genera ni se recuerda: se llena con su enlace */
+    if (encuesta.classification === "Interna" && encuesta.assignMode === "Formulario libre") continue;
 
     const dentroDeVentana = enVentana(prog);
 

@@ -32,6 +32,9 @@ function candidatos(encuesta) {
 
   /* Encuesta interna: una por colaborador del área evaluada.
      Así el supervisor recibe el promedio de su equipo, no una sola nota. */
+  /* Formulario libre: no se genera nada, cada quien lo llena con el enlace */
+  if (catalogo.esLibre(encuesta)) return [];
+
   if (encuesta.classification === "Interna") {
     /* Manda la lista congelada en la encuesta; si no hay, se calcula
        con el área y el modo de asignación. */
@@ -348,7 +351,7 @@ function resultadosInternos() {
 
   db.encuestas
     .listar()
-    .filter((encuesta) => encuesta.classification === "Interna")
+    .filter((encuesta) => encuesta.classification === "Interna" && !catalogo.esLibre(encuesta))
     .forEach((encuesta) => {
       const grupos = {};
       db.instancias.listar(encuesta.id).forEach((instancia) => {

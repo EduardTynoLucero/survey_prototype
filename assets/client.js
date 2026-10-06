@@ -26,6 +26,9 @@
 
     const instanceId = params.get("i");
     const surveyId = params.get("s");
+    const formId = params.get("f");
+
+    if (formId) return formularioLibre(formId);
 
     let survey = null;
     let works = [];
@@ -80,6 +83,66 @@
       async onFinish(respuestas) {
         if (!instancia) return; // prueba directa sin envío asociado
         await DL.api.responder(instancia.id, respuestas);
+      },
+    });
+  }
+
+  /* ?f=<id>: formulario libre. Cualquiera con el enlace lo llena; cada
+     envío queda como una respuesta más, sin evaluar a nadie. */
+  async function formularioLibre(id) {
+    let survey = null;
+    let puede = null;
+    try {
+      survey = await DL.api.encuesta(id);
+      puede = await DL.api.disponible(id);
+    } catch (error) {
+      aviso("!", "No se encontró el formulario", "Revise que el enlace esté completo.", "closed");
+      return;
+    }
+    if (survey.classification !== "Interna" || survey.assignMode !== "Formulario libre") {
+      aviso("!", "Enlace no válido", "Este enlace no corresponde a un formulario.", "closed");
+      return;
+    }
+
+    metaTitle.textContent = "Formulario";
+    metaPeriod.textContent = "";
+    document.title = survey.name;
+
+    if (!puede.ok) {
+      aviso("⏳", "Formulario cerrado", puede.motivo, "closed");
+      return;
+    }
+
+    const pideNombre = survey.anonymous === false;
+    mount.innerHTML = `
+      ${pideNombre ? `
+        <div class="libre-nombre">
+          <label for="libreNombre">Su nombre *</label>
+          <input id="libreNombre" type="text" maxlength="120" placeholder="Escriba su nombre" autocomplete="name">
+        </div>` : ""}
+      <div id="libreMount"></div>`;
+    const campo = document.getElementById("libreNombre");
+
+    DL.createRuntime({
+      mount: document.getElementById("libreMount"),
+      survey,
+      works: [],
+      respondent: "",
+      exito: `
+        <div class="success">
+          <div class="icon">✓</div>
+          <h2>Respuesta registrada</h2>
+          <p>Gracias por responder <b>${survey.name.replace(/</g, "&lt;")}</b>.</p>
+          <p><a class="libre-otra" href="${window.location.pathname}?f=${encodeURIComponent(id)}">Enviar otra respuesta</a></p>
+        </div>`,
+      async onFinish(respuestas) {
+        const nombre = campo ? campo.value.trim() : "";
+        if (pideNombre && !nombre) {
+          campo.focus();
+          throw new Error("Escriba su nombre antes de enviar.");
+        }
+        await DL.api.responderLibre(id, nombre, respuestas);
+        if (campo) campo.closest(".libre-nombre").remove();
       },
     });
   }

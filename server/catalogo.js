@@ -590,15 +590,21 @@ function seccionesInternas() {
   ];
 }
 
+/* Encuesta interna de "formulario libre": cualquiera con el enlace la
+   llena, como un formulario normal. No evalúa a nadie ni usa órdenes. */
+const LIBRE = "Formulario libre";
+const esLibre = (encuesta) => Boolean(encuesta && encuesta.classification === "Interna" && encuesta.assignMode === LIBRE);
+
 function nuevaEncuesta(clasificacion = "Externa", extra = {}) {
   const externa = clasificacion === "Externa";
   return Object.assign(
     {
       id: uid(externa ? "ext" : "int"),
-      name: externa ? "Nueva encuesta externa" : "Nueva encuesta interna",
+      /* La interna arranca vacía, como el formulario del sistema */
+      name: externa ? "Nueva encuesta externa" : "",
       description: externa
         ? "Encuesta mensual para conocer la experiencia de los doctores con los trabajos enviados durante el período anterior."
-        : "Encuesta dirigida a los colaboradores de Digital Labs.",
+        : "",
       classification: clasificacion,
       subtype: externa ? "Servicio y Calidad" : "Liderazgo",
       status: "Borrador",
@@ -609,7 +615,7 @@ function nuevaEncuesta(clasificacion = "Externa", extra = {}) {
 
       /* ---- Configuración de encuesta interna (igual que el sistema) ---- */
       assignMode: "Por supervisor",
-      areaKey: externa ? "" : "ADMINISTRACION",
+      areaKey: "",
       supervisorName: "",
       respondents: [],
       suggestions: true,
@@ -658,7 +664,18 @@ function nuevaEncuesta(clasificacion = "Externa", extra = {}) {
         statuses: ["enviado"],
         selectedIds: externa ? ["15281", "15292", "15304", "15318", "15330"] : [],
       },
-      sections: seccionesEnBlanco(),
+      /* Las internas arrancan como en el sistema: una tabla de preguntas
+         con estrellas, mejora y justificación */
+      sections: externa
+        ? seccionesEnBlanco()
+        : [
+            seccion({
+              title: "Preguntas",
+              description: "",
+              next: "submit",
+              questions: [pregunta({ text: "", area: "Recursos Humanos", lowOptionsRequired: false, lowCommentRequired: false })],
+            }),
+          ],
       createdAt: new Date().toISOString(),
     },
     extra
@@ -771,4 +788,4 @@ function agruparPorDoctor(estados, rango = {}, filtro = {}) {
   return [...mapa.values()];
 }
 
-module.exports = { AREAS, TRABAJOS, PERIODO, VERSION_SEMILLA, telefonoDoctor, telefonoBonito, uid, pregunta, seccion, nuevaEncuesta, semilla, agruparPorDoctor, mesAnterior, aplicarPeriodoAuto, aISO, bonita, enRango };
+module.exports = { LIBRE, esLibre, AREAS, TRABAJOS, PERIODO, VERSION_SEMILLA, telefonoDoctor, telefonoBonito, uid, pregunta, seccion, nuevaEncuesta, semilla, agruparPorDoctor, mesAnterior, aplicarPeriodoAuto, aISO, bonita, enRango };
