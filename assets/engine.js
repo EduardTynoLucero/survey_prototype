@@ -63,12 +63,21 @@
       pedir("GET", `/api/respondedores?area=${encodeURIComponent(area)}&modo=${encodeURIComponent(modo || "Por supervisor")}`),
     resultados: () => pedir("GET", "/api/resultados"),
     resultado: (id) => pedir("GET", `/api/resultados/${encodeURIComponent(id)}`),
+    resultadosDoctores: () => pedir("GET", "/api/resultados-doctores"),
+    resultadoDoctores: (id) => pedir("GET", `/api/resultados-doctores/${encodeURIComponent(id)}`),
+    seguimiento: (surveyId) => pedir("GET", `/api/seguimiento/${encodeURIComponent(surveyId)}`),
+    respuestasDoctores: (surveyId) => pedir("GET", `/api/respuestas-doctores${surveyId ? `?encuesta=${encodeURIComponent(surveyId)}` : ""}`),
+    respuestaDoctor: (instanceId) => pedir("GET", `/api/respuestas-doctores/${encodeURIComponent(instanceId)}`),
+    historicoDoctor: (doctor) => pedir("GET", `/api/historico-doctor?doctor=${encodeURIComponent(doctor)}`),
+    tableroDoctores: (filtros = {}) => pedir("GET", `/api/tablero-doctores?${new URLSearchParams(Object.entries(filtros).filter(([, v]) => v && v !== "all")).toString()}`),
     portalLogin: (correo) => pedir("POST", "/api/portal/login", { correo }),
     portalPersonal: () => pedir("GET", "/api/portal/personal"),
     portalBandeja: (id) => pedir("GET", `/api/portal/${encodeURIComponent(id)}/bandeja`),
     encuestasDeTrabajo: (id) => pedir("GET", `/api/trabajos/${encodeURIComponent(id)}/encuesta`),
     mensajes: () => pedir("GET", "/api/mensajes"),
     reiniciar: () => pedir("POST", "/api/reiniciar"),
+    cargarDatosPrueba: () => pedir("POST", "/api/datos-prueba"),
+    quitarDatosPrueba: () => pedir("DELETE", "/api/datos-prueba"),
 
     encuestas: () => pedir("GET", "/api/encuestas"),
     encuesta: (id) => pedir("GET", `/api/encuestas/${id}`),
@@ -903,12 +912,21 @@
           /* Una evaluación general no se atribuye a órdenes ni a asesoras (RN-ENC-003). */
           const linked = answer.level === "general" ? [] : answer.workIds;
           const asesoras = [...new Set(worksByIds(linked).map((work) => work.advisor))];
+          const question = findQuestion(answer.questionId);
+          const section = survey.sections.find((item) => (item.questions || []).some((q) => q.id === answer.questionId));
           return {
+            questionId: answer.questionId,
+            sectionId: section ? section.id : "",
+            categoria: section ? section.title : "",
+            tipo: question ? question.type : "",
             pregunta: answer.questionText,
             area: answer.area,
             calificacion: answer.rating || null,
             valor: answer.values.length ? answer.values.join(", ") : answer.value,
             nivel: answer.level === "general" ? "GENERAL" : "ESPECÍFICA",
+            nivelDetalle: answer.level,
+            ordenes: answer.workIds || [],
+            valores: answer.values.length ? answer.values.slice() : answer.value && question && question.type === "single" ? [answer.value] : [],
             trabajos: linked,
             asesoras: answer.level === "general" ? [] : asesoras,
             motivos: answer.tags,

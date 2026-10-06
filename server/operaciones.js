@@ -156,6 +156,9 @@ async function enviar(encuesta, { soloNoEnviados = false } = {}) {
     });
     instancia.state = "Enviada";
     instancia.sentAt = ahora();
+    /* Estado técnico de WhatsApp, aparte del estado de la encuesta */
+    instancia.waStatus = salida.ok ? "ok" : salida.simulado ? "simulado" : "error";
+    instancia.waStatusError = salida.error || "";
     db.instancias.guardar(instancia);
     resultados.push({ doctor: instancia.doctor, ...salida });
   }
@@ -217,6 +220,8 @@ async function recordar(encuesta, { forzar = false } = {}) {
     });
     instancia.reminders = Number(instancia.reminders || 0) + 1;
     instancia.lastReminderAt = ahora();
+    instancia.reminderStatus = salida.ok ? "ok" : salida.simulado ? "simulado" : "error";
+    instancia.reminderStatusError = salida.error || "";
     db.instancias.guardar(instancia);
     enviados.push({ doctor: instancia.doctor, numero: instancia.reminders, ...salida });
   }
@@ -391,6 +396,13 @@ function resultadosInternos() {
               promedio: suyas.length ? media.toFixed(2) : "—",
               respuestas: (instancia.answers || []).length,
               instanceId: instancia.id,
+              submittedAt: instancia.finishedAt || "",
+              answers: (instancia.answers || []).map((r) => ({
+                questionText: r.pregunta,
+                score: r.calificacion || null,
+                improvementComment: r.comentario || "",
+                justification: (r.motivos || []).join(", "),
+              })),
             };
           }),
           comentarios: todas.map((r) => r.comentario).filter(Boolean),

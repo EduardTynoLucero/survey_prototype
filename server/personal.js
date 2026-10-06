@@ -472,7 +472,15 @@ const HISTORICO = FILAS_HISTORICO.map((fila, indice) => {
     })),
     colaboradores: gente.map((persona, i) => {
       const respondio = i < respuestas;
+      /* Lo que contestó cada quien, repartido alrededor de su promedio */
+      const notas = respondio ? repartir(notasGente[i], preguntas.length, indice * 31 + i) : [];
       return {
+        answers: notas.map((nota, q) => ({
+          questionText: preguntas[q],
+          score: Math.max(1, Math.min(5, Math.round(nota))),
+          improvementComment: "",
+          justification: "",
+        })),
         name: persona ? persona.name : `COLABORADOR ${i + 1}`,
         position: persona ? persona.position : "",
         email: persona ? persona.email : "",

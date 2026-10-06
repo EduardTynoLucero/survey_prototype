@@ -17,6 +17,9 @@ const db = require("./db");
 const whatsapp = require("./whatsapp");
 const operaciones = require("./operaciones");
 const agenda = require("./agenda");
+const resultadosDoctores = require("./resultadosDoctores");
+const seguimiento = require("./seguimiento");
+const datosPrueba = require("./datosPrueba");
 
 const RAIZ = path.join(__dirname, "..");
 
@@ -181,6 +184,37 @@ async function api(req, res, ruta, consulta) {
     return json(res, resultado);
   }
 
+  /* ---- resultados de encuestas a doctores (externas) ---- */
+  /* ---- seguimiento de encuestas a doctores (solo lectura) ---- */
+  if (partes[1] === "seguimiento" && partes[2] && req.method === "GET") {
+    const filas = seguimiento.envios(partes[2]);
+    return filas ? json(res, filas) : json(res, { error: "encuesta no encontrada" }, 404);
+  }
+  if (partes[1] === "respuestas-doctores" && !partes[2] && req.method === "GET") {
+    return json(res, seguimiento.respuestas((consulta || {}).encuesta));
+  }
+  if (partes[1] === "respuestas-doctores" && partes[2] && req.method === "GET") {
+    const detalle = seguimiento.respuesta(partes[2]);
+    return detalle ? json(res, detalle) : json(res, { error: "respuesta no encontrada" }, 404);
+  }
+  if (partes[1] === "historico-doctor" && req.method === "GET") {
+    const datos = seguimiento.historico((consulta || {}).doctor || "");
+    return datos ? json(res, datos) : json(res, { error: "doctor sin encuestas" }, 404);
+  }
+  if (partes[1] === "tablero-doctores" && req.method === "GET") {
+    return json(res, seguimiento.tablero(consulta || {}));
+  }
+
+  if (partes[1] === "resultados-doctores" && !partes[2] && req.method === "GET") {
+    return json(res, resultadosDoctores.periodos());
+  }
+
+  if (partes[1] === "resultados-doctores" && partes[2] && req.method === "GET") {
+    const detalle = resultadosDoctores.detalle(decodeURIComponent(partes[2]));
+    if (!detalle) return json(res, { error: "encuesta enviada no encontrada" }, 404);
+    return json(res, detalle);
+  }
+
   /* ---- portal del colaborador ---- */
   if (partes[1] === "portal" && partes[2] === "login" && req.method === "POST") {
     const persona = personal.porCorreo(cuerpo.correo);
@@ -238,6 +272,14 @@ async function api(req, res, ruta, consulta) {
 
   if (partes[1] === "mensajes" && req.method === "GET") {
     return json(res, db.mensajes.listar());
+  }
+
+  /* Datos de prueba: seis meses de envíos y respuestas a doctores */
+  if (partes[1] === "datos-prueba" && req.method === "POST") {
+    return json(res, datosPrueba.cargar());
+  }
+  if (partes[1] === "datos-prueba" && req.method === "DELETE") {
+    return json(res, datosPrueba.quitar());
   }
 
   if (partes[1] === "reiniciar" && req.method === "POST") {
@@ -427,7 +469,7 @@ async function api(req, res, ruta, consulta) {
       return json(res, {
         instancia,
         encuesta,
-        trabajos: catalogo.TRABAJOS.filter((t) => instancia.workIds.includes(t.id)),
+        trabajos: datosPrueba.todosLosTrabajos().filter((t) => instancia.workIds.includes(t.id)),
       });
     }
     if (partes[3] === "abrir" && req.method === "POST") {

@@ -414,6 +414,10 @@
        entra directo en edición. */
     state.editando = esNueva;
     state.editorTab = "detalle";
+    state.segFiltro = null;
+    state.respFiltro = null;
+    state.seg = null;
+    state.resp = null;
     state.step = STEPS[0][0];
     state.activeSectionId = state.draft.sections[0].id;
     state.activeQuestionId = state.draft.sections[0].questions[0].id;
@@ -503,6 +507,14 @@
     }
 
     /* Paginador de trabajos */
+    const paginaDoc = event.target.closest("[data-doc-pagina]");
+    if (paginaDoc && !paginaDoc.disabled) {
+      state.resDocPagina = Number(paginaDoc.dataset.docPagina) || 1;
+      renderView();
+      const tabla = els.appView.querySelector(".dsv-rs-card.is-flush");
+      if (tabla) tabla.scrollIntoView({ block: "start" });
+      return;
+    }
     const paginaBtn = event.target.closest("[data-tra-pagina]");
     if (paginaBtn && !paginaBtn.disabled) {
       state.traPagina = Number(paginaBtn.dataset.traPagina) || 1;
@@ -515,7 +527,7 @@
     const moduleTab = event.target.closest("[data-module]");
     if (moduleTab) {
       state.module = moduleTab.dataset.module;
-      const inicio = { works: "work-list", lab: "employees", reports: "results-list" };
+      const inicio = { works: "work-list", lab: "employees", reports: "results-list", dashboard: "dashboard" };
       irA(inicio[state.module] || "survey-list");
       return;
     }
@@ -554,8 +566,11 @@
 
   async function irA(view) {
     if (view !== "answers") state.answersSurveyId = "";
+    state.segPila = [];
     state.view = view;
-    state.module = view.startsWith("work")
+    state.module = view === "dashboard"
+      ? "dashboard"
+      : view.startsWith("work")
       ? "works"
       : ["employees", "whatsapp"].includes(view)
         ? "lab"
@@ -582,8 +597,12 @@
           DL.FASES_LAB = catalogos.fases;
         }
       }
-      if (view === "results-list") state.resultados = await DL.api.resultados();
+      if (view === "results-list") {
+        state.resColab = null;
+        await cargarResultados();
+      }
       if (view === "inbox") await cargarBandeja();
+      if (view === "dashboard") await cargarDashboard();
       if (view === "my-results") await cargarMisResultados();
     } catch (error) {
       showToast(error.message);
@@ -597,9 +616,15 @@
     state.poll = setInterval(async () => {
       try {
         if (view === "sends" && state.draft) state.instancias = await DL.api.instancias(state.draft.id);
-        if (view === "editor-envios" && state.draft) state.instancias = await DL.api.instancias(state.draft.id);
+        if (view === "editor-envios" && state.draft) {
+          state.instancias = await DL.api.instancias(state.draft.id);
+          if (isExternal()) state.seg = await DL.api.seguimiento(state.draft.id);
+        }
         if (view === "answers") state.respuestas = await DL.api.respuestas(state.answersSurveyId || undefined);
         if (view === "whatsapp") state.mensajes = await DL.api.mensajes();
+        /* No repinta mientras alguien escribe en un filtro */
+        const campo = document.activeElement;
+        if (campo && els.appView.contains(campo) && /^(INPUT|SELECT|TEXTAREA)$/.test(campo.tagName)) return;
         renderView();
       } catch (error) {
         /* silencio */
@@ -648,6 +673,9 @@
     }
 
     try {
+      if (await accionDashboard(act, arg)) return;
+      if (await accionResultados(act, arg)) return;
+      if (await accionSeguimiento(act, arg)) return;
       switch (act) {
         case "create": {
           const plantilla = await DL.api.plantilla(arg);
@@ -767,6 +795,7 @@
         case "sends": {
           if (arg) abrirBorrador(await DL.api.encuesta(arg));
           state.instancias = await DL.api.instancias(state.draft.id);
+          if (isExternal()) await cargarSeguimiento(state.draft.id);
           state.editorTab = "envios";
           state.view = "survey-edit";
           state.module = "surveys";
@@ -800,6 +829,24 @@
           renderView();
           showToast("Encuesta eliminada.");
           return;
+
+        case "datos-prueba": {
+          const cargados = (state.surveys || []).some((e) => e.id === "ext-prueba-doctores");
+          let salida = null;
+          if (cargados) {
+            if (!window.confirm("¿Quitar la encuesta de prueba con todos sus envíos y respuestas?")) return;
+            await DL.api.quitarDatosPrueba();
+          } else {
+            if (!window.confirm("Se agrega una encuesta externa con seis meses de envíos y respuestas inventadas. No se manda ningún WhatsApp. ¿Continuar?")) return;
+            salida = await DL.api.cargarDatosPrueba();
+          }
+          state.draft = null;
+          await recargarBase();
+          state.view = "survey-list";
+          renderApp();
+          showToast(cargados ? "Datos de prueba quitados." : `Datos de prueba cargados: ${salida.envios} envíos a ${salida.doctores} doctores (${salida.periodos[0]} a ${salida.periodos[salida.periodos.length - 1]}).`);
+          return;
+        }
 
         case "reset-demo":
           if (!window.confirm("Esto borra las encuestas, los envíos y las respuestas. ¿Continuar?")) return;
@@ -867,6 +914,7 @@
         case "answers-survey": {
           abrirBorrador(await DL.api.encuesta(arg));
           state.respuestas = await DL.api.respuestas(arg);
+          if (isExternal()) await cargarRespuestasDoc(arg);
           state.editorTab = "respuestas";
           state.view = "survey-edit";
           state.module = "surveys";
@@ -914,11 +962,15 @@
           if (state.esNueva) {
             if (arg === "respuestas") state.respuestas = [];
             if (arg === "envios") state.instancias = [];
+            state.seg = [];
+            state.resp = [];
             renderView();
             return;
           }
           if (arg === "respuestas") state.respuestas = await DL.api.respuestas(survey.id);
           if (arg === "envios") state.instancias = await DL.api.instancias(survey.id);
+          if (arg === "respuestas" && isExternal()) await cargarRespuestasDoc(survey.id);
+          if (arg === "envios" && isExternal()) await cargarSeguimiento(survey.id);
           renderView();
           if (arg === "envios") iniciarPoll("editor-envios");
           return;
@@ -977,6 +1029,7 @@
 
         case "result-detail": {
           state.resultado = null;
+          state.resColab = null;
           state.volverA = state.view === "my-results" ? "my-results" : "results-list";
           state.view = "result-detail";
           state.module = "surveys";
@@ -1189,6 +1242,7 @@
         /* ---------- agenda y envios ---------- */
         case "generar":
           state.instancias = await DL.api.generar(survey.id);
+          if (isExternal()) await cargarSeguimiento(survey.id);
           renderView();
           showToast(`${state.instancias.length} encuesta(s) generada(s), una por doctor.`);
           return;
@@ -1197,6 +1251,7 @@
           showToast("Enviando por WhatsApp…");
           const salida = await DL.api.enviar(survey.id);
           state.instancias = await DL.api.instancias(survey.id);
+          if (isExternal()) await cargarSeguimiento(survey.id);
           renderView();
           const reales = salida.filter((item) => item.ok).length;
           const fallos = salida.length - reales;
@@ -1234,6 +1289,7 @@
           showToast("Enviando recordatorios…");
           const salida = await DL.api.recordar(survey.id);
           state.instancias = await DL.api.instancias(survey.id);
+          if (isExternal()) await cargarSeguimiento(survey.id);
           renderView();
           if (salida.motivo) {
             showToast("No se envió nada: " + salida.motivo + ".");
@@ -1262,6 +1318,7 @@
           showToast("Ejecutando…");
           const salida = await DL.api.ejecutar(survey.id);
           state.instancias = await DL.api.instancias(survey.id);
+          if (isExternal()) await cargarSeguimiento(survey.id);
           state.surveys = await DL.api.encuestas();
           renderView();
           showToast(`${salida.instancias} encuesta(s) generada(s), ${salida.envios.length} envío(s).`);
@@ -1274,6 +1331,7 @@
           showToast("Ejecutando lo que falta…");
           const salida = await DL.api.completar(survey.id);
           state.instancias = await DL.api.instancias(survey.id);
+          if (isExternal()) await cargarSeguimiento(survey.id);
           state.surveys = await DL.api.encuestas();
           renderView();
           showToast(
@@ -1287,6 +1345,7 @@
         case "cerrar-ventana": {
           const salida = await DL.api.cerrar(survey.id);
           state.instancias = await DL.api.instancias(survey.id);
+          if (isExternal()) await cargarSeguimiento(survey.id);
           renderView();
           showToast(`${salida.cerradas} encuesta(s) cerrada(s).`);
           return;
@@ -1363,6 +1422,9 @@
 
   function onInput(event) {
     const target = event.target;
+    if (cambioDashboard(target, true)) return;
+    if (cambioResultados(target, true)) return;
+    if (cambioSeguimiento(target, true)) return;
 
     /* Los filtros de los listados viven fuera del editor */
     if (target.matches("[data-filtro]")) {
@@ -1438,6 +1500,9 @@
 
   function onChange(event) {
     const target = event.target;
+    if (cambioDashboard(target, false)) return;
+    if (cambioResultados(target, false)) return;
+    if (cambioSeguimiento(target, false)) return;
 
     if (target.matches("[data-filtro]")) {
       filtrosEnc()[target.dataset.filtro] = target.value;
@@ -1731,6 +1796,10 @@
   }
 
   function renderSidebar() {
+    if (state.module === "dashboard") {
+      renderDashSidebar();
+      return;
+    }
     if (state.module === "works") {
       els.sidebar.innerHTML = `
         <div class="side-title">TRABAJOS</div>
@@ -1760,9 +1829,12 @@
     els.sidebar.innerHTML = `
       <div class="side-title">ENCUESTAS</div>
       ${/* Bandeja, Mis encuestas y Mis resultados viven en sus tres pestañas */ ""}
-      <button class="side-link ${["survey-list", "survey-edit", "inbox", "my-results"].includes(state.view) ? "active" : ""}" type="button" data-view="survey-list">Encuestas</button>
-      <button class="side-link ${["results-list", "result-detail"].includes(state.view) ? "active" : ""}" type="button" data-view="results-list">Resultados de encuestas</button>
-      <div class="side-foot"><button class="mini-btn" type="button" data-act="reset-demo">Restaurar demo</button></div>`;
+      <button class="side-link ${["survey-list", "survey-edit", "inbox", "my-results", "resp-detail", "doctor-history"].includes(state.view) ? "active" : ""}" type="button" data-view="survey-list">Encuestas</button>
+      <button class="side-link ${["results-list", "result-detail", "doctor-result"].includes(state.view) ? "active" : ""}" type="button" data-view="results-list">Resultados de encuestas</button>
+      <div class="side-foot">
+        <button class="mini-btn" type="button" data-act="datos-prueba">${(state.surveys || []).some((e) => e.id === "ext-prueba-doctores") ? "Quitar datos de prueba" : "Cargar datos de prueba"}</button>
+        <button class="mini-btn" type="button" data-act="reset-demo">Restaurar demo</button>
+      </div>`;
   }
 
   function renderView() {
@@ -1781,6 +1853,10 @@
       "my-results": renderMisResultados,
       "results-list": renderResultadosLista,
       "result-detail": renderResultadoDetalle,
+      "doctor-result": renderDoctorDetalle,
+      "resp-detail": renderRespuestaDetalle,
+      "doctor-history": renderHistoricoDoctor,
+      dashboard: renderDashboard,
     };
     if (["survey-edit"].includes(state.view) && !state.draft) state.view = "survey-list";
     if (state.view === "sends" && !state.draft) {
@@ -2253,6 +2329,7 @@
 
   /* ---- Tab Respuestas: lo que contestaron en esta encuesta ---- */
   function cuerpoRespuestas() {
+    if (isExternal()) return cuerpoRespuestasDoctores();
     const survey = draft();
     const lista = state.respuestas || [];
     const porInstancia = {};
@@ -2290,6 +2367,7 @@
 
   /* ---- Tab Envíos: el JOB y el estado de cada envío ---- */
   function cuerpoEnvios() {
+    if (isExternal()) return cuerpoEnviosDoctores();
     const survey = draft();
     const instancias = state.instancias || [];
     const externa = isExternal();
@@ -3319,10 +3397,10 @@ npm start</pre>` : ""}
   }
 
   /* Paginador corto: primera, anterior, una ventana de páginas, siguiente, última */
-  function paginador(pagina, paginas) {
+  function paginador(pagina, paginas, atributo = "data-tra-pagina") {
     if (paginas <= 1) return "";
     const boton = (etiqueta, destino, activa = false, apagada = false) =>
-      `<button class="dl-page ${activa ? "is-active" : ""}" type="button" data-tra-pagina="${destino}" ${apagada ? "disabled" : ""}>${etiqueta}</button>`;
+      `<button class="dl-page ${activa ? "is-active" : ""}" type="button" ${atributo}="${destino}" ${apagada ? "disabled" : ""}>${etiqueta}</button>`;
 
     const ventana = [];
     const desde = Math.max(1, Math.min(pagina - 2, paginas - 4));
@@ -3767,120 +3845,2226 @@ npm start</pre>` : ""}
   const claseEscala = (texto) =>
     texto === "Excelente" ? "ok" : texto === "Bueno" ? "" : texto === "Regular" ? "warn" : "off";
 
+  /* ==================================================================
+     ENCUESTAS · Resultados de encuestas
+     Igual que en el sistema: dos pestañas
+       - Resultados Encuestas            -> internas (por supervisor y período)
+       - Resultados encuestas a doctores -> externas (por encuesta enviada)
+     Al abrir una encuesta a doctores se ve la encuesta con sus respuestas
+     al estilo de un formulario: Resumen · Pregunta · Individual · Doctores.
+     ================================================================== */
+
+  /* Íconos (los mismos de lucide que usa el sistema) */
+  const ICONOS = {
+    eye: '<path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/>',
+    users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+    check: '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
+    sliders: '<line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/>',
+    down: '<path d="m6 9 6 6 6-6"/>',
+    x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+    back: '<path d="m12 19-7-7 7-7"/><path d="M19 12H5"/>',
+    left: '<path d="m15 18-6-6 6-6"/>',
+    right: '<path d="m9 18 6-6-6-6"/>',
+    sheet: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M8 13h2"/><path d="M14 13h2"/><path d="M8 17h2"/><path d="M14 17h2"/>',
+    chart: '<path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/>',
+    download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/>',
+    star: '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>',
+    briefcase: '<rect width="20" height="14" x="2" y="7" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>',
+    mail: '<rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>',
+    clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16.5 12"/>',
+    clipboard: '<rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/>',
+    message: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M13 8H7"/><path d="M17 12H7"/>',
+    trending: '<polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>',
+    shield: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="M12 8v4"/><path d="M12 16h.01"/>',
+    dot: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="1"/>',
+  };
+  const ico = (nombre, tam = 14) =>
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${tam}" height="${tam}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONOS[nombre] || ""}</svg>`;
+
+  const MESES_RES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
+  const LS_RES = "dl_resultados_encuestas";
+  const FILTROS_RES = { tab: "internas", abiertos: false, buscar: "", anio: "all", mes: "all", area: "all", detalle: "detail" };
+  const filtrosRes = () => (state.filtrosRes = state.filtrosRes || leerFiltros(LS_RES, FILTROS_RES));
+  const guardarFiltrosRes = () => escribirFiltros(LS_RES, state.filtrosRes);
+
+  /* Pestañas del grupo "Resultados de encuestas", como NavGroupTabs */
+  function tabsResultados(activa) {
+    if (!esAdmin()) return "";
+    const items = [
+      ["internas", "Resultados Encuestas"],
+      ["doctores", "Resultados encuestas a doctores"],
+    ];
+    return `
+      <div class="nav-group-tabs" role="tablist" aria-label="Opciones">
+        ${items.map(([clave, nombre]) => `
+          <button type="button" role="tab" aria-selected="${activa === clave}" class="nav-group-tab ${activa === clave ? "is-active" : ""}" data-act="res-tab" data-arg="${clave}" title="${attr(nombre)}">${esc(nombre)}</button>`).join("")}
+      </div>`;
+  }
+
+  /* Carga lo que necesita la pestaña activa */
+  async function cargarResultados() {
+    const f = filtrosRes();
+    if (f.tab === "doctores") {
+      state.resDoctores = await DL.api.resultadosDoctores();
+    }
+    else state.resultados = await DL.api.resultados();
+  }
+
   function renderResultadosLista() {
-    const list = state.resultados;
-    const delMotor = list.filter((r) => r.origen === "Motor de encuestas").length;
+    const f = filtrosRes();
+    return f.tab === "doctores" ? renderDoctoresLista() : renderInternasLista();
+  }
+
+  /* ---------------- Resultados Encuestas (internas) ---------------- */
+  const etiquetaNota = (nota) => {
+    if (nota === null || nota === undefined) return "—";
+    if (nota >= 4.5) return "Excelente";
+    if (nota >= 3.5) return "Bueno";
+    if (nota >= 2.5) return "Regular";
+    return "Crítico";
+  };
+
+  /* Como en el sistema: sin respuestas el promedio es 0.00 (Crítico) */
+  const notaInterna = (r) => (r.respuestas && r.promedio !== "—" ? Number(r.promedio) : 0);
+  const anioDe = (r) => Number(String(r.period || "").slice(0, 4)) || 0;
+  const mesDe = (r) => Number(String(r.period || "").slice(5, 7)) || 0;
+
+  function internasFiltradas() {
+    const f = filtrosRes();
+    const termino = String(f.buscar || "").trim().toLowerCase();
+    return (state.resultados || []).filter((r) => {
+      const coincide =
+        !termino ||
+        [r.surveyName, r.supervisor, r.area, r.periodLabel].some((v) => String(v || "").toLowerCase().includes(termino));
+      return (
+        coincide &&
+        (f.anio === "all" || Number(f.anio) === anioDe(r)) &&
+        (f.mes === "all" || Number(f.mes) === mesDe(r)) &&
+        (f.area === "all" || f.area === r.area)
+      );
+    });
+  }
+
+  function renderInternasLista() {
+    const f = filtrosRes();
+    const todas = state.resultados || [];
+    const filas = internasFiltradas();
+    const anios = [...new Set(todas.map(anioDe).filter(Boolean))].sort((a, b) => b - a);
+    const areas = [...new Set(todas.map((r) => r.area).filter((a) => a && a !== "—"))].sort();
+    const activos = (String(f.buscar).trim() ? 1 : 0) + (f.anio !== "all" ? 1 : 0) + (f.mes !== "all" ? 1 : 0) + (f.area !== "all" ? 1 : 0);
+    const asignados = filas.reduce((t, r) => t + Number(r.asignadas || 0), 0);
+    const respuestas = filas.reduce((t, r) => t + Number(r.respuestas || 0), 0);
+    const opcion = (valor, texto, actual) => `<option value="${attr(valor)}" ${String(actual) === String(valor) ? "selected" : ""}>${esc(texto)}</option>`;
 
     return `
-      <div class="dl-tabs">
-        <div class="dl-tabs-list">
-          <button class="dl-tab is-active" type="button">Resultados de encuestas (${list.length})</button>
+      ${tabsResultados("internas")}
+      <div class="svy-gmrst__page">
+        <div class="svy-gmrst__filters">
+          <div class="svy-gmrst__filter-toolbar">
+            <button type="button" class="svy-gmrst__filter-toggle ${f.abiertos ? "is-open" : ""}" data-act="res-filtros" aria-expanded="${f.abiertos}">
+              ${ico("sliders")}
+              <span>${f.abiertos ? "Ocultar filtros" : "Ver filtros"}</span>
+              ${activos ? `<span class="svy-gmrst__filter-count">${activos}</span>` : ""}
+              ${ico("down", 14).replace("<svg ", '<svg class="svy-gmrst__filter-chevron" ')}
+            </button>
+            ${activos ? `<button type="button" class="svy-gmrst__filter-clear" data-act="res-limpiar">${ico("x", 13)} Borrar filtros</button>` : ""}
+            ${f.abiertos ? `
+              <div class="svy-gmrst__inline-filters">
+                <div class="svy-gmrst__filter-field">
+                  <label>Buscar</label>
+                  <input id="buscarResultado" type="text" placeholder="Encuesta, área, supervisor o periodo" value="${attr(f.buscar)}" data-res-filtro="buscar">
+                </div>
+                <div class="svy-gmrst__filter-field">
+                  <label>Año</label>
+                  <select data-res-filtro="anio">${opcion("all", "Todos", f.anio)}${anios.map((a) => opcion(a, a, f.anio)).join("")}</select>
+                </div>
+                <div class="svy-gmrst__filter-field">
+                  <label>Mes</label>
+                  <select data-res-filtro="mes">${opcion("all", "Todos", f.mes)}${MESES_RES.map((m, i) => opcion(i + 1, m, f.mes)).join("")}</select>
+                </div>
+                <div class="svy-gmrst__filter-field">
+                  <label>Área</label>
+                  <select data-res-filtro="area">${opcion("all", "Todas", f.area)}${areas.map((a) => opcion(a, a, f.area)).join("")}</select>
+                </div>
+              </div>` : ""}
+          </div>
         </div>
-        <div class="dl-tabs-actions">
-          <button class="dl-tab-action" type="button" data-view="survey-list">Encuestas</button>
-        </div>
-      </div>
 
-      <div class="dercas-ribbon">
-        <div><b>Períodos evaluados</b><span>Los resultados que ya venían del sistema anterior y los que va generando este motor, en una sola tabla.</span></div>
-        <div class="ribbon-tags"><span class="badge neutral">${list.length - delMotor} del sistema anterior</span><span class="badge pink">${delMotor} de este motor</span></div>
-      </div>
-
-      <section class="dl-card">
-        <div class="dl-table-wrap">
-          <table class="dl-table">
-            <thead><tr>
-              <th>Encuesta</th><th>Supervisor</th><th>Período</th><th>Área</th>
-              <th>Asignadas</th><th>Respuestas</th><th>Promedio</th><th>Origen</th><th class="dl-col-opts">Acción</th>
-            </tr></thead>
-            <tbody>
-              ${list.length === 0 ? `<tr><td colspan="9">Todavía no hay períodos evaluados.</td></tr>` : list.map((r) => `
-                <tr class="dl-row-link" data-row-open="result-detail" data-row-arg="${esc(r.id)}" title="Ver el detalle">
-                  <td><b>${esc(r.surveyName)}</b></td>
-                  <td>${esc(r.supervisor || "—")}</td>
-                  <td>${esc(r.periodLabel)}</td>
-                  <td>${esc(r.area)}</td>
-                  <td><span class="dl-badge">${r.asignadas}</span></td>
-                  <td><span class="dl-badge ${r.respuestas ? "ok" : "off"}">${r.respuestas}</span></td>
-                  <td><b class="${r.escala === "Regular" ? "wk-bad" : "wk-good"}">${esc(r.promedio)}</b> <i>${esc(r.escala)}</i></td>
-                  <td><span class="dl-badge ${r.origen === "Motor de encuestas" ? "pink" : "off"}">${esc(r.origen)}</span></td>
-                  <td class="dl-col-opts"><button class="dl-mini" type="button" data-act="result-detail" data-arg="${esc(r.id)}">Ver detalle</button></td>
-                </tr>`).join("")}
-            </tbody>
-          </table>
+        <div class="svy-gmrst__table-card">
+          <div class="dl-table-wrap">
+            <table class="dl-table">
+              <thead><tr>
+                <th>Encuesta</th><th>Supervisor</th><th>Periodo</th><th>Área</th>
+                <th>Asignadas</th><th>Respuestas</th><th>Promedio</th><th class="dl-col-opts">Acción</th>
+              </tr></thead>
+              <tbody>
+                ${filas.length === 0 ? `<tr><td colspan="8">No hay resultados para mostrar.</td></tr>` : filas.map((r) => {
+                  const nota = notaInterna(r);
+                  return `
+                  <tr class="dl-row-link" data-row-open="result-detail" data-row-arg="${attr(r.id)}" title="Ver el detalle">
+                    <td><div class="svy-gmrst__primary-cell"><div class="svy-gmrst__primary-title" title="${attr(r.surveyName)}">${esc(r.surveyName)}</div></div></td>
+                    <td>${esc(r.supervisor || "—")}</td>
+                    <td>${esc(r.periodLabel)}</td>
+                    <td>${esc(r.area || "—")}</td>
+                    <td><span class="svy-gmrst__metric-chip">${ico("users")}${r.asignadas}</span></td>
+                    <td><span class="svy-gmrst__metric-chip svy-gmrst__metric-chip-success">${ico("check")}${r.respuestas}</span></td>
+                    <td><div class="svy-gmrst__score-box"><span class="svy-gmrst__score-value">${nota.toFixed(2)}</span><span class="svy-gmrst__score-label">${etiquetaNota(nota)}</span></div></td>
+                    <td class="dl-col-opts"><button type="button" class="svy-gmrst__action-btn" data-act="result-detail" data-arg="${attr(r.id)}">${ico("eye")} Ver detalle</button></td>
+                  </tr>`;
+                }).join("")}
+              </tbody>
+            </table>
+          </div>
+          <div class="dl-table-foot"><span>${filas.length} registro(s)</span></div>
         </div>
-        <div class="dl-table-foot"><span>${list.length} registro(s)</span></div>
-      </section>`;
+
+        <div class="svy-gmrst__summary-grid">
+          <div class="svy-gmrst__summary-card"><span class="svy-gmrst__label">Encuestas aplicadas</span><strong>${filas.length}</strong></div>
+          <div class="svy-gmrst__summary-card"><span class="svy-gmrst__label">Colaboradores asignados</span><strong>${asignados}</strong></div>
+          <div class="svy-gmrst__summary-card"><span class="svy-gmrst__label">Respuestas recibidas</span><strong>${respuestas}</strong></div>
+        </div>
+      </div>`;
+  }
+
+  /* ---------------- Detalle de una encuesta interna ---------------- */
+  const ESTADO_COLAB = { Respondida: "submitted", Enviada: "pending", Abierta: "in_progress", Parcial: "in_progress" };
+
+  function analisisInterno(r) {
+    const preguntas = (r.preguntas || []).map((q, i) => ({
+      questionId: i,
+      questionText: q.texto,
+      averageScore: q.promedio === "—" ? null : Number(q.promedio),
+      responsesCount: q.respuestas,
+    }));
+    const dist = { excellent: 0, good: 0, regular: 0, critical: 0 };
+    (r.colaboradores || []).forEach((c) => {
+      if (c.promedio === "—") return;
+      const n = Number(c.promedio);
+      if (n >= 4.5) dist.excellent += 1;
+      else if (n >= 3.5) dist.good += 1;
+      else if (n >= 2.5) dist.regular += 1;
+      else dist.critical += 1;
+    });
+    const conNota = preguntas.filter((q) => q.averageScore !== null);
+    return {
+      preguntas,
+      dist,
+      fortalezas: conNota.slice().sort((a, b) => b.averageScore - a.averageScore).slice(0, 3),
+      debilidades: conNota.slice().sort((a, b) => a.averageScore - b.averageScore).slice(0, 3),
+    };
   }
 
   function renderResultadoDetalle() {
     const r = state.resultado;
-    if (!r) return `<p class="cargando">Cargando el detalle…</p>`;
+    const desdeAdmin = state.volverA !== "my-results";
+    if (!r) return `${desdeAdmin ? tabsResultados("internas") : ""}<div class="svy-gmdet__page"><div class="svy-gmdet__state-card">Cargando detalle…</div></div>`;
+
+    const f = filtrosRes();
+    const tab = f.detalle === "analytics" ? "analytics" : "detail";
+    const a = analisisInterno(r);
+    const nota = notaInterna(r);
+    const maxPregunta = Math.max(5, ...a.preguntas.map((q) => Number(q.averageScore || 0)));
+    const maxDist = Math.max(1, a.dist.excellent, a.dist.good, a.dist.regular, a.dist.critical);
+    const comentarios = (r.comentarios || []).filter((c) => String(c || "").trim());
+    const nota2 = (v) => (v === null || v === undefined || v === "—" ? "—" : Number(v).toFixed(2));
+    const colab = state.resColab !== null && state.resColab !== undefined ? (r.colaboradores || [])[state.resColab] : null;
 
     return `
-      <div class="dl-tabs">
-        <div class="dl-tabs-list">
-          <button class="dl-tab is-active" type="button">Detalle</button>
+      ${desdeAdmin ? tabsResultados("internas") : ""}
+      <div class="svy-gmdet__page">
+        <div class="svy-gmdet__tabs">
+          <div class="svy-gmdet__tabs-list" role="tablist">
+            <button type="button" role="tab" aria-selected="${tab === "detail"}" class="svy-gmdet__tab ${tab === "detail" ? "is-active" : ""}" data-act="res-det-tab" data-arg="detail">${ico("users", 16)} Detalle</button>
+            <button type="button" role="tab" aria-selected="${tab === "analytics"}" class="svy-gmdet__tab ${tab === "analytics" ? "is-active" : ""}" data-act="res-det-tab" data-arg="analytics">${ico("chart", 16)} Análisis</button>
+          </div>
+          <div class="svy-gmdet__tabs-actions">
+            <button type="button" class="svy-gmdet__tab-action" data-view="${state.volverA || "results-list"}">${ico("back", 16)} Regresar</button>
+            <button type="button" class="svy-gmdet__tab-action svy-gmdet__tab-action--primary" data-act="res-exportar">${ico("download", 16)} Exportar Excel</button>
+          </div>
         </div>
-        <div class="dl-tabs-actions">
-          <button class="dl-tab-action" type="button" data-view="${state.volverA || "results-list"}">Regresar</button>
+
+        <div class="svy-gmdet__summary-grid">
+          <div class="svy-gmdet__summary-card"><span class="svy-gmdet__label">Supervisor evaluado</span><strong>${esc(r.supervisor || "—")}</strong></div>
+          <div class="svy-gmdet__summary-card"><span class="svy-gmdet__label">Asignados</span><strong>${r.asignadas}</strong></div>
+          <div class="svy-gmdet__summary-card"><span class="svy-gmdet__label">Respondieron</span><strong>${r.respuestas}</strong></div>
+          <div class="svy-gmdet__summary-card svy-gmdet__summary-highlight"><span class="svy-gmdet__label">Resultado Total</span><strong>${nota.toFixed(2)}</strong></div>
+        </div>
+
+        ${tab === "detail" ? `
+          <div class="svy-gmdet__table-card">
+            <div class="svy-gmdet__table-header"><div>Colaborador</div><div>Estado</div><div>Promedio</div><div>Respuestas</div><div>Acción</div></div>
+            ${(r.colaboradores || []).map((c, i) => {
+              const estado = ESTADO_COLAB[c.estado] || "pending";
+              const contestadas = (c.answers || []).filter((x) => x.score !== null && x.score !== undefined).length || (c.estado === "Respondida" ? c.respuestas : 0);
+              return `
+              <div class="svy-gmdet__row-wrap">
+                <div class="svy-gmdet__table-row">
+                  <div class="svy-gmdet__collaborator-cell">
+                    <div class="svy-gmdet__collaborator-name">${esc(c.name)}</div>
+                    <div class="svy-gmdet__collaborator-meta">
+                      <span>${ico("briefcase", 13)}${esc(c.position || "—")}</span>
+                      <span>${ico("mail", 13)}${esc(c.email || "—")}</span>
+                    </div>
+                  </div>
+                  <div><div class="svy-gmdet__status-pill status-${estado}">${estado === "submitted" ? ico("check") : ico("clock")}<span>${estado === "submitted" ? "Respondida" : estado === "in_progress" ? "En progreso" : "Pendiente"}</span></div></div>
+                  <div><span class="svy-gmdet__score-pill">${ico("star")}${nota2(c.promedio)}</span></div>
+                  <div>${contestadas}</div>
+                  <div class="svy-gmdet__row-actions">
+                    <button type="button" class="svy-gmdet__expand-btn" data-act="res-colab" data-arg="${i}"><span>Ver detalle</span>${ico("down", 16)}</button>
+                  </div>
+                </div>
+              </div>`;
+            }).join("")}
+          </div>
+
+          <div class="svy-gmdet__question-results-card">
+            <div class="svy-gmdet__question-header"><div>Pregunta</div><div>Promedio</div><div>Respuestas</div></div>
+            ${a.preguntas.length === 0
+              ? `<div class="svy-gmdet__empty-row">${ico("clipboard", 16)}<span>No hay resultados por pregunta para mostrar.</span></div>`
+              : a.preguntas.map((q, i) => `
+                <div class="svy-gmdet__question-row">
+                  <div class="svy-gmdet__question-text"><strong>${i + 1}. ${esc(q.questionText)}</strong></div>
+                  <div class="svy-gmdet__question-score">${nota2(q.averageScore)}</div>
+                  <div class="svy-gmdet__question-count">${ico("clipboard")}<span>${q.responsesCount || 0}</span></div>
+                </div>`).join("")}
+          </div>
+
+          <div class="svy-gmdet__comments-card">
+            <div class="svy-gmdet__comments-head">${ico("message", 18)}<h2>Comentarios generales</h2></div>
+            ${comentarios.length === 0
+              ? `<div class="svy-gmdet__empty-row">${ico("message", 16)}<span>No hay comentarios generales registrados.</span></div>`
+              : `<div class="svy-gmdet__comments-list">${comentarios.map((texto, i) => `<div class="svy-gmdet__comment-card"><span>Comentario ${i + 1}</span><p>${esc(texto)}</p></div>`).join("")}</div>`}
+          </div>
+
+          ${colab ? `
+            <div class="svy-gmdet__modal-overlay" data-act="res-colab-cerrar">
+              <div class="svy-gmdet__modal" data-act="res-noop">
+                <div class="svy-gmdet__modal-header">
+                  <div><h3>${esc(colab.name)}</h3><p>${esc(colab.position || "—")} · ${esc(colab.email || "—")}</p></div>
+                  <button type="button" class="svy-gmdet__modal-close" data-act="res-colab-cerrar">Cerrar</button>
+                </div>
+                <div class="svy-gmdet__modal-meta">
+                  <div class="svy-gmdet__status-pill status-${ESTADO_COLAB[colab.estado] || "pending"}">${colab.estado === "Respondida" ? ico("check") : ico("clock")}<span>${colab.estado === "Respondida" ? "Respondida" : "Pendiente"}</span></div>
+                  <span class="svy-gmdet__score-pill">${ico("star")}${nota2(colab.promedio)}</span>
+                </div>
+                <div class="svy-gmdet__modal-body">
+                  ${(colab.answers || []).length === 0
+                    ? `<div class="svy-gmdet__empty-answers">${ico("dot", 16)}<span>No hay respuestas registradas para este colaborador.</span></div>`
+                    : colab.answers.map((x, i) => `
+                      <div class="svy-gmdet__answer-card">
+                        <div class="svy-gmdet__answer-top">
+                          <div class="svy-gmdet__answer-question">${i + 1}. ${esc(x.questionText)}</div>
+                          <div class="svy-gmdet__answer-score">Calificación: ${x.score !== null && x.score !== undefined ? x.score : "—"}</div>
+                        </div>
+                        ${x.improvementComment ? `<div class="svy-gmdet__answer-block"><span class="svy-gmdet__answer-label">Comentario de mejora</span><p>${esc(x.improvementComment)}</p></div>` : ""}
+                        ${x.justification ? `<div class="svy-gmdet__answer-block"><span class="svy-gmdet__answer-label">Justificación</span><p>${esc(x.justification)}</p></div>` : ""}
+                      </div>`).join("")}
+                </div>
+              </div>
+            </div>` : ""}` : `
+          <div class="svy-gmdet__analytics-grid">
+            <div class="svy-gmdet__analytics-card">
+              <div class="svy-gmdet__analytics-head"><div class="svy-gmdet__analytics-title">${ico("trending", 16)}<span>Promedio por pregunta</span></div></div>
+              <div class="svy-gmdet__bars-list">
+                ${a.preguntas.map((q) => `
+                  <div class="svy-gmdet__bar-row">
+                    <div class="svy-gmdet__bar-labels">
+                      <div class="svy-gmdet__bar-main-label">${esc(q.questionText)}</div>
+                      <div class="svy-gmdet__bar-sub-label">Respuestas: ${q.responsesCount || 0}</div>
+                    </div>
+                    <div class="svy-gmdet__bar-track"><div class="svy-gmdet__bar-fill svy-gmdet__bar-fill-primary" style="width:${(Number(q.averageScore || 0) / maxPregunta) * 100}%"></div></div>
+                    <div class="svy-gmdet__bar-value">${nota2(q.averageScore)}</div>
+                  </div>`).join("")}
+              </div>
+            </div>
+
+            <div class="svy-gmdet__analytics-card">
+              <div class="svy-gmdet__analytics-head"><div class="svy-gmdet__analytics-title">${ico("shield", 16)}<span>Distribución de resultados</span></div></div>
+              <div class="svy-gmdet__bars-list">
+                ${[["excellent", "Excelente"], ["good", "Bueno"], ["regular", "Regular"], ["critical", "Crítico"]].map(([clave, nombre]) => `
+                  <div class="svy-gmdet__bar-row">
+                    <div class="svy-gmdet__distribution-tag tag-${clave}">${nombre}</div>
+                    <div class="svy-gmdet__bar-track"><div class="svy-gmdet__bar-fill svy-gmdet__bar-fill-${clave}" style="width:${(a.dist[clave] / maxDist) * 100}%"></div></div>
+                    <div class="svy-gmdet__bar-value">${a.dist[clave]}</div>
+                  </div>`).join("")}
+              </div>
+            </div>
+
+            <div class="svy-gmdet__analytics-card">
+              <div class="svy-gmdet__analytics-head"><div class="svy-gmdet__analytics-title">${ico("trending", 16)}<span>Top fortalezas</span></div></div>
+              <div class="svy-gmdet__insights-list">
+                ${a.fortalezas.map((q) => `<div class="svy-gmdet__insight-item positive"><div class="svy-gmdet__insight-question">${esc(q.questionText)}</div><div class="svy-gmdet__insight-score">${nota2(q.averageScore)}</div></div>`).join("")}
+              </div>
+            </div>
+
+            <div class="svy-gmdet__analytics-card">
+              <div class="svy-gmdet__analytics-head"><div class="svy-gmdet__analytics-title">${ico("shield", 16)}<span>Top debilidades</span></div></div>
+              <div class="svy-gmdet__insights-list">
+                ${a.debilidades.map((q) => `<div class="svy-gmdet__insight-item negative"><div class="svy-gmdet__insight-question">${esc(q.questionText)}</div><div class="svy-gmdet__insight-score">${nota2(q.averageScore)}</div></div>`).join("")}
+              </div>
+            </div>
+          </div>`}
+      </div>`;
+  }
+
+  /* Descarga un CSV que abre directo en Excel */
+  function descargarCSV(nombre, encabezados, filas) {
+    const celda = (v) => `"${String(v === null || v === undefined ? "" : v).replace(/"/g, '""')}"`;
+    const texto = [encabezados, ...filas].map((fila) => fila.map(celda).join(";")).join("\r\n");
+    const blob = new Blob(["﻿" + texto], { type: "text/csv;charset=utf-8" });
+    const enlace = document.createElement("a");
+    enlace.href = URL.createObjectURL(blob);
+    enlace.download = nombre;
+    document.body.appendChild(enlace);
+    enlace.click();
+    enlace.remove();
+    setTimeout(() => URL.revokeObjectURL(enlace.href), 1000);
+  }
+
+  function exportarInterna() {
+    const r = state.resultado;
+    if (!r) return;
+    const filas = [];
+    (r.colaboradores || []).forEach((c) => {
+      const respuestas = c.answers && c.answers.length ? c.answers : [{ questionText: "", score: "" }];
+      respuestas.forEach((x) => filas.push([r.surveyName, r.periodLabel, r.supervisor, c.name, c.position, c.email, c.estado, c.promedio, x.questionText, x.score, x.improvementComment || ""]));
+    });
+    descargarCSV(
+      `Resultado_${String(r.surveyName).replace(/[^\w]+/g, "_").slice(0, 40)}_${r.period}.csv`,
+      ["ENCUESTA", "PERIODO", "SUPERVISOR", "COLABORADOR", "PUESTO", "CORREO", "ESTADO", "PROMEDIO", "PREGUNTA", "CALIFICACION", "COMENTARIO"],
+      filas
+    );
+  }
+
+  /* ---------------- Resultados encuestas a doctores ---------------- */
+  const pad2 = (n) => String(n).padStart(2, "0");
+  function fechaLocal(valor) {
+    const m = String(valor || "").replace("T", " ").match(/^(\d{4})-(\d{2})-(\d{2})(?: (\d{2}):(\d{2}))?/);
+    return m ? { d: m[3], m: m[2], y: m[1], hh: m[4] || "00", mm: m[5] || "00" } : null;
+  }
+  const fmtFechaHora = (v) => {
+    const f = fechaLocal(v);
+    return f ? `${f.d}/${f.m}/${f.y} ${f.hh}:${f.mm}` : "—";
+  };
+  const pctRes = (parte, total) => (total ? Math.round((parte / total) * 100) : 0);
+  const fmtProm = (v, digitos = 2) => (v === null || v === undefined ? "—" : Number(v).toFixed(digitos));
+  const plural = (n, uno, varios) => `${n} ${n === 1 ? uno : varios}`;
+  const fmtPctComa = (parte, total) => (total ? `${((parte / total) * 100).toFixed(1).replace(".", ",")} %` : "0 %");
+  const NIVEL_TXT = { GENERAL: "General", GROUP: "Grupo de órdenes", WORK: "Por orden" };
+  const MODO_TXT = { GENERAL: "General", MIXED: "Mixta", INDIVIDUAL: "Individual" };
+  const ESTADO_INST = {
+    GENERATED: "Generada", SENT: "Enviada", SEND_FAILED: "Envío fallido", OPENED: "Abierta", PARTIAL: "Parcial",
+    COMPLETED: "Completada", CLOSED_PARTIAL: "Cerrada parcial", CLOSED_NO_RESPONSE: "Cerrada sin respuesta",
+  };
+  const tonoInst = (s) => (s === "COMPLETED" ? "ok" : s === "SEND_FAILED" ? "bad" : String(s).startsWith("CLOSED") ? "off" : "warn");
+  const doctorTxt = (p) => [p && p.doctorPrefix, p && p.doctorName].filter(Boolean).join(" ") || "Doctor";
+  const tieneNota = (r) => r.score !== null && r.score !== undefined && Number(r.score) > 0;
+
+  /* Estrella llena, vacía o a medias */
+  const estrella = (lleno) =>
+    `<span class="dsv-rs-star"><span class="dsv-rs-star-off">★</span><span class="dsv-rs-star-on" style="width:${Math.round(Math.min(1, Math.max(0, lleno)) * 100)}%">★</span></span>`;
+  const escalaEstrellas = (valor, tam = "md") => `
+    <div class="dsv-rs-scale is-${tam}" role="img" aria-label="${fmtProm(valor)} de 5 estrellas">
+      ${[1, 2, 3, 4, 5].map((n) => `<div class="dsv-rs-scale-item"><span class="dsv-rs-scale-num">${n}</span>${estrella((Number(valor) || 0) - (n - 1))}</div>`).join("")}
+    </div>`;
+  const estrellasLinea = (valor) =>
+    `<span class="dsv-rs-inline-stars" role="img" aria-label="${fmtProm(valor, 1)} de 5 estrellas">${[1, 2, 3, 4, 5].map((n) => estrella((Number(valor) || 0) - (n - 1))).join("")}</span>`;
+
+  const columnas = (dist, total) => {
+    const max = Math.max(1, ...[1, 2, 3, 4, 5].map((n) => dist[n] || 0));
+    return `
+      <div class="dsv-rs-cols" role="img" aria-label="Distribución de ${total} calificaciones">
+        ${[1, 2, 3, 4, 5].map((n) => {
+          const c = dist[n] || 0;
+          return `
+          <div class="dsv-rs-col" title="${n} ★: ${c} de ${total} (${fmtPctComa(c, total)})">
+            <div class="dsv-rs-col-plot">
+              <span class="dsv-rs-col-value">${c} <small>(${fmtPctComa(c, total)})</small></span>
+              <span class="dsv-rs-col-bar" style="height:${(c / max) * 100}%"></span>
+            </div>
+            <span class="dsv-rs-col-label">${n}</span>
+          </div>`;
+        }).join("")}
+      </div>`;
+  };
+
+  const barras = (items, total) => `
+    <div class="dsv-rs-bars">
+      ${items.map((it) => {
+        const p = pctRes(it.total, total);
+        return `
+        <div class="dsv-rs-bar" title="${attr(it.label)}: ${it.total} de ${total} (${p}%)">
+          <span class="dsv-rs-bar-label">${esc(it.label)}</span>
+          <span class="dsv-rs-bar-track"><span class="dsv-rs-bar-fill" style="width:${p}%"></span></span>
+          <span class="dsv-rs-bar-value">${it.total} <small>(${p}%)</small></span>
+        </div>`;
+      }).join("")}
+    </div>`;
+
+  const COLORES_PASTEL = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"];
+  function pastel(items, total) {
+    const suma = items.reduce((a, it) => a + it.total, 0);
+    let angulo = 0;
+    const punto = (a) => [60 + 56 * Math.sin(a), 60 - 56 * Math.cos(a)];
+    const rebanadas = items.map((it, i) => {
+      const desde = angulo;
+      angulo += suma ? (it.total / suma) * Math.PI * 2 : 0;
+      return Object.assign({}, it, { color: COLORES_PASTEL[i % COLORES_PASTEL.length], desde, hasta: angulo });
+    });
+    const dibujadas = rebanadas.filter((s) => s.total > 0);
+    const arco = (s) => {
+      const [x1, y1] = punto(s.desde);
+      const [x2, y2] = punto(s.hasta);
+      return `M 60 60 L ${x1.toFixed(2)} ${y1.toFixed(2)} A 56 56 0 ${s.hasta - s.desde > Math.PI ? 1 : 0} 1 ${x2.toFixed(2)} ${y2.toFixed(2)} Z`;
+    };
+    return `
+      <div class="dsv-rs-pie">
+        <svg viewBox="0 0 120 120" width="170" height="170" role="img" aria-label="Respuestas por opción">
+          ${dibujadas.length === 1
+            ? `<circle cx="60" cy="60" r="56" fill="${dibujadas[0].color}"><title>${esc(dibujadas[0].label)}</title></circle>`
+            : dibujadas.map((s) => `<path d="${arco(s)}" fill="${s.color}" stroke="#fff" stroke-width="1.5"><title>${esc(s.label)}: ${s.total}</title></path>`).join("")}
+          ${dibujadas.length === 0 ? `<circle cx="60" cy="60" r="56" fill="#f1f2f4"></circle>` : ""}
+        </svg>
+        <ul class="dsv-rs-legend">
+          ${rebanadas.map((s) => `<li title="${attr(s.label)}: ${s.total} de ${total}"><i style="background:${s.color}"></i><span>${esc(s.label)}</span><b>${s.total} <small>(${fmtPctComa(s.total, suma)})</small></b></li>`).join("")}
+        </ul>
+      </div>`;
+  }
+
+  /* Encuesta como se configuró + las respuestas de cada pregunta */
+  function modeloDoctores(detalle) {
+    const rows = detalle.rows || [];
+    const porPregunta = new Map();
+    rows.forEach((r) => {
+      if (r.questionId === null || r.questionId === undefined) return;
+      if (!porPregunta.has(r.questionId)) porPregunta.set(r.questionId, []);
+      porPregunta.get(r.questionId).push(r);
+    });
+    const usadas = new Set();
+    const secciones = (detalle.sections || []).map((sec) => ({
+      key: `sec-${sec.doctorSurveySectionId}`,
+      title: sec.title || "Sin categoría",
+      description: sec.description || "",
+      useWorks: Boolean(sec.useWorks),
+      questions: (sec.questions || [])
+        .map((q) => {
+          usadas.add(q.doctorSurveyQuestionId);
+          return {
+            key: `q-${q.doctorSurveyQuestionId}`,
+            sectionTitle: sec.title || "",
+            text: q.questionText || "",
+            helpText: q.helpText || "",
+            type: String(q.questionType || "STARS").toUpperCase(),
+            areaName: q.responsibleAreaName || "",
+            required: Boolean(q.isRequired),
+            isActive: q.isActive !== false,
+            lowPrompt: q.lowPrompt || "",
+            highPrompt: q.highPrompt || "",
+            config: { choices: q.choiceOptions || [], improvements: q.improvementOptions || [], values: q.valueOptions || [] },
+            rows: porPregunta.get(q.doctorSurveyQuestionId) || [],
+          };
+        })
+        .filter((q) => q.isActive || q.rows.length > 0),
+    }));
+
+    /* Respuestas a preguntas que ya no están en la encuesta */
+    const sueltas = rows.filter((r) => r.questionId === null || r.questionId === undefined || !usadas.has(r.questionId));
+    if (sueltas.length) {
+      const porTexto = new Map();
+      sueltas.forEach((r) => {
+        const clave = `${r.sectionTitle || "Sin categoría"}::${r.questionText}`;
+        if (!porTexto.has(clave)) porTexto.set(clave, { sectionTitle: r.sectionTitle || "Sin categoría", r, rows: [] });
+        porTexto.get(clave).rows.push(r);
+      });
+      const extra = new Map();
+      porTexto.forEach((item, clave) => {
+        if (!extra.has(item.sectionTitle)) extra.set(item.sectionTitle, []);
+        extra.get(item.sectionTitle).push({
+          key: `old-${clave}`, sectionTitle: item.sectionTitle, text: item.r.questionText, helpText: "",
+          type: item.r.questionType || "STARS", areaName: item.r.areaName || "", required: false, lowPrompt: "", highPrompt: "",
+          config: { choices: [], improvements: [], values: [] }, rows: item.rows, removed: true,
+        });
+      });
+      extra.forEach((questions, title) => secciones.push({ key: `old-${title}`, title, description: "", useWorks: false, questions }));
+    }
+
+    let numero = 0;
+    return secciones
+      .filter((s) => s.questions.length > 0)
+      .map((s) => Object.assign({}, s, { questions: s.questions.map((q) => Object.assign({}, q, { number: ++numero })) }));
+  }
+
+  function estadisticas(q) {
+    const dist = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+    const cuenta = (lista) => {
+      const m = new Map();
+      lista.forEach((v) => {
+        const k = String(v || "").trim();
+        if (k) m.set(k, (m.get(k) || 0) + 1);
+      });
+      return m;
+    };
+    const conConfig = (config, mapa) => {
+      const conocidas = new Set(config);
+      return [
+        ...config.map((label) => ({ label, total: mapa.get(label) || 0 })),
+        ...[...mapa.entries()].filter(([k]) => !conocidas.has(k)).map(([label, total]) => ({ label, total })).sort((a, b) => b.total - a.total),
+      ];
+    };
+    const doctores = new Set();
+    const ordenes = new Set();
+    const niveles = { GENERAL: 0, GROUP: 0, WORK: 0 };
+    let calificaciones = 0;
+    let suma = 0;
+    let bajas = 0;
+    q.rows.forEach((r) => {
+      doctores.add(r.doctorSurveyInstanceId);
+      (r.workCodes || []).forEach((c) => ordenes.add(`${r.doctorSurveyInstanceId}:${c}`));
+      niveles[r.answerLevel || "GENERAL"] = (niveles[r.answerLevel || "GENERAL"] || 0) + 1;
+      if (tieneNota(r)) {
+        dist[Math.min(5, Math.max(1, Math.round(Number(r.score))))] += 1;
+        calificaciones += 1;
+        suma += Number(r.score);
+        if (r.isLowScore) bajas += 1;
+      }
+    });
+    return {
+      answers: q.rows.length,
+      respondents: doctores.size,
+      works: ordenes.size,
+      ratings: calificaciones,
+      average: calificaciones ? suma / calificaciones : null,
+      dist,
+      lowCount: bajas,
+      levels: niveles,
+      choices: conConfig(q.config.choices, cuenta(q.rows.flatMap((r) => r.choiceOptions || []))),
+      improvements: conConfig(q.config.improvements, cuenta(q.rows.flatMap((r) => r.improvementOptions || []))),
+      values: conConfig(q.config.values, cuenta(q.rows.flatMap((r) => r.valueOptions || []))),
+      texts: q.rows.filter((r) => String(r.textValue || "").trim()),
+      comments: q.rows.filter((r) => String(r.comment || "").trim()),
+      evidences: q.rows.filter((r) => Number(r.evidenceCount) > 0),
+    };
+  }
+
+  /* Un elemento por doctor que respondió, el más reciente primero */
+  function respondieron(detalle) {
+    const mapa = new Map();
+    (detalle.rows || []).forEach((r) => {
+      if (!mapa.has(r.doctorSurveyInstanceId)) mapa.set(r.doctorSurveyInstanceId, { key: r.doctorSurveyInstanceId, doctorName: r.doctorName, answeredAt: r.answeredAt || "", rows: [] });
+      const p = mapa.get(r.doctorSurveyInstanceId);
+      p.rows.push(r);
+      if (String(r.answeredAt || "") > String(p.answeredAt || "")) p.answeredAt = r.answeredAt;
+    });
+    const porId = new Map((detalle.instances || []).map((i) => [i.doctorSurveyInstanceId, i]));
+    return [...mapa.values()]
+      .map((p) => {
+        const notas = p.rows.filter(tieneNota);
+        return Object.assign({}, p, {
+          ratings: notas.length,
+          average: notas.length ? notas.reduce((a, r) => a + Number(r.score), 0) / notas.length : null,
+          lowCount: notas.filter((r) => r.isLowScore).length,
+          works: new Set(p.rows.flatMap((r) => r.workCodes || [])).size,
+        }, porId.get(p.key) || {});
+      })
+      .sort((a, b) => String(b.answeredAt || "").localeCompare(String(a.answeredAt || "")) || String(a.doctorName).localeCompare(String(b.doctorName), "es"));
+  }
+
+  const modalidad = (rows) => {
+    const niveles = new Set(rows.map((r) => r.answerLevel || "GENERAL"));
+    if (niveles.has("GROUP")) return "MIXED";
+    if (niveles.has("WORK")) return "INDIVIDUAL";
+    return rows.some((r) => (r.workCodes || []).length > 0) ? "GENERAL" : null;
+  };
+
+  /* Lista de opciones como se configuraron, con las elegidas marcadas */
+  const listaMarcas = (opciones, elegidas, radio = false) => {
+    const sel = elegidas || [];
+    const todas = [...(opciones || []), ...sel.filter((x) => !(opciones || []).includes(x))];
+    if (!todas.length) return "";
+    return `<ul class="dsv-rs-checks ${radio ? "is-radio" : ""}">${todas.map((l) => `<li class="${sel.includes(l) ? "is-on" : ""}"><i aria-hidden="true"></i><span>${esc(l)}</span></li>`).join("")}</ul>`;
+  };
+
+  const chipsOrdenes = (codigos, clave) => {
+    if (!codigos || !codigos.length) return "";
+    const abierto = (state.resDocMas || {})[clave];
+    const vista = abierto ? codigos : codigos.slice(0, 8);
+    return `<span class="dsv-rs-works">${vista.map((c) => `<code>${esc(c)}</code>`).join("")}${codigos.length > 8 ? `<button type="button" class="dsv-rs-link is-small" data-act="doc-mas" data-arg="${attr(clave)}">${abierto ? "ver menos" : `+${codigos.length - 8} más`}</button>` : ""}</span>`;
+  };
+
+  /* Lo que contestó un doctor en una pregunta, con el aspecto del formulario */
+  function respuestaForm(q, r, sola) {
+    const codigos = r.workCodes || [];
+    const eleccion = q.type === "SINGLE" || q.type === "MULTIPLE";
+    const verMejoras = (r.improvementOptions || []).length > 0 || (r.isLowScore && q.config.improvements.length > 0);
+    const verValores = (r.valueOptions || []).length > 0;
+    return `
+      <div class="dsv-rs-fa ${sola ? "is-single" : "is-multi"} ${r.isLowScore ? "is-low" : ""}">
+        ${codigos.length > 0 || !sola ? `
+          <div class="dsv-rs-fa-scope">
+            <span class="dsv-rs-tag">${esc(NIVEL_TXT[r.answerLevel] || r.answerLevel)}</span>
+            ${codigos.length ? `<span class="dsv-rs-muted">${plural(codigos.length, "orden", "órdenes")}</span>` : ""}
+            ${chipsOrdenes(codigos, r.doctorSurveyAnswerId)}
+            ${(r.advisors || []).length ? `<span class="dsv-rs-muted">Asesora: ${esc(r.advisors.join(", "))}</span>` : ""}
+          </div>` : ""}
+        ${r.score ? (sola ? escalaEstrellas(r.score, "lg") : `
+          <div class="dsv-rs-fa-score">${estrellasLinea(r.score)}<span>${r.score} / 5</span>${r.isLowScore ? `<span class="dsv-rs-pill is-bad">Nota baja</span>` : ""}</div>`) : ""}
+        ${eleccion ? listaMarcas(q.config.choices, r.choiceOptions, q.type === "SINGLE") : ""}
+        ${r.textValue ? `<p class="dsv-rs-fa-text">${esc(r.textValue)}</p>` : ""}
+        ${verMejoras ? `<div class="dsv-rs-follow"><span class="dsv-rs-follow-title">${esc(q.lowPrompt || "¿Qué podemos mejorar?")}</span>${listaMarcas(q.config.improvements, r.improvementOptions)}</div>` : ""}
+        ${verValores ? `<div class="dsv-rs-follow"><span class="dsv-rs-follow-title">${esc(q.highPrompt || "¿Qué fue lo que más valoró?")}</span>${listaMarcas(q.config.values, r.valueOptions)}</div>` : ""}
+        ${r.comment ? `<div class="dsv-rs-follow"><span class="dsv-rs-follow-title">Comentario</span><p class="dsv-rs-fa-text">${esc(r.comment)}</p></div>` : ""}
+      </div>`;
+  }
+
+  const bandaSeccion = (sec, derecha) => `
+    <div class="dsv-rs-band"><b>${esc(sec.title)}</b>${derecha ? `<span>${esc(derecha)}</span>` : ""}</div>
+    ${sec.description ? `<section class="dsv-rs-card dsv-rs-desc">${esc(sec.description)}</section>` : ""}`;
+  const subBloque = (titulo, contenido) => `<div class="dsv-rs-subblock"><h4>${esc(titulo)}</h4>${contenido}</div>`;
+
+  function resumenPregunta(q) {
+    const st = estadisticas(q);
+    const todos = (state.resDocComentarios || {})[q.key];
+    const comentarios = todos ? st.comments : st.comments.slice(0, 5);
+    const niveles = Object.entries(st.levels).filter(([, n]) => n > 0);
+    return `
+      <article class="dsv-rs-card">
+        <header class="dsv-rs-qhead">
+          <div>
+            <h3>${q.number}. ${esc(q.text)}</h3>
+            <p class="dsv-rs-sub">${plural(st.respondents, "respuesta", "respuestas")}${q.areaName ? ` · Área: ${esc(q.areaName)}` : ""}${q.removed ? " · esta pregunta ya no está en la encuesta" : ""}</p>
+          </div>
+          ${st.answers > 0 ? `<button type="button" class="dsv-rs-link" data-act="doc-ver-pregunta" data-arg="${attr(q.key)}">Ver respuestas</button>` : ""}
+        </header>
+        ${st.answers === 0 ? `<p class="dsv-rs-none">Nadie ha respondido esta pregunta.</p>` : `
+          ${st.ratings > 0 ? `
+            <div class="dsv-rs-avgbox"><b>Calificación promedio (${fmtProm(st.average)})</b>${escalaEstrellas(st.average)}</div>
+            ${columnas(st.dist, st.ratings)}
+            ${st.works > 0 || st.ratings !== st.respondents || st.lowCount > 0 ? `
+              <p class="dsv-rs-note">
+                <span>${plural(st.ratings, "calificación", "calificaciones")}</span>
+                ${st.works > 0 ? `<span>${plural(st.works, "orden evaluada", "órdenes evaluadas")}</span>` : ""}
+                ${st.works > 0 ? niveles.map(([nivel, n]) => `<span>${esc(NIVEL_TXT[nivel] || nivel)}: ${n}</span>`).join("") : ""}
+                ${st.lowCount > 0 ? `<span class="dsv-rs-pill is-bad">${plural(st.lowCount, "nota baja", "notas bajas")}</span>` : ""}
+              </p>` : ""}` : ""}
+          ${st.choices.length > 0 ? (q.type === "SINGLE" && st.choices.length <= COLORES_PASTEL.length ? pastel(st.choices, st.answers) : barras(st.choices, st.answers)) : ""}
+          ${st.texts.length > 0 ? `<ul class="dsv-rs-rows">${st.texts.map((r) => `<li><span>${esc(r.textValue)}</span><small>${esc(r.doctorName)}</small></li>`).join("")}</ul>` : ""}
+          ${st.improvements.some((x) => x.total > 0) ? subBloque(q.lowPrompt || "Motivos de nota baja", barras(st.improvements, st.lowCount || st.ratings || st.answers)) : ""}
+          ${st.values.some((x) => x.total > 0) ? subBloque(q.highPrompt || "Lo que más valoran", barras(st.values, st.ratings - st.lowCount || st.ratings || st.answers)) : ""}
+          ${st.comments.length > 0 ? subBloque(`Comentarios (${st.comments.length})`, `
+            <ul class="dsv-rs-rows">
+              ${comentarios.map((r) => `
+                <li>
+                  ${r.score ? `<span class="dsv-rs-pill ${r.isLowScore ? "is-bad" : "is-ok"}">${r.score} ★</span>` : ""}
+                  <span>${esc(r.comment)}</span>
+                  <small>${esc(r.doctorName)}${(r.workCodes || []).length === 1 ? ` · orden ${esc(r.workCodes[0])}` : ""}</small>
+                </li>`).join("")}
+            </ul>
+            ${st.comments.length > 5 ? `<button type="button" class="dsv-rs-link is-small" data-act="doc-comentarios" data-arg="${attr(q.key)}">${todos ? "Ver menos" : `Ver los ${st.comments.length} comentarios`}</button>` : ""}`) : ""}
+        `}
+      </article>`;
+  }
+
+  function vistaResumen(detalle, secciones) {
+    const totales = detalle.totals || {};
+    const enviadas = totales.sent || totales.instances || 0;
+    const dist = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+    let total = 0;
+    let suma = 0;
+    (detalle.rows || []).filter(tieneNota).forEach((r) => {
+      dist[Math.min(5, Math.max(1, Math.round(Number(r.score))))] += 1;
+      total += 1;
+      suma += Number(r.score);
+    });
+    const promedio = totales.averageScore !== null && totales.averageScore !== undefined ? totales.averageScore : total ? suma / total : null;
+
+    return `
+      <section class="dsv-rs-card">
+        <h3 class="dsv-rs-title">Estadísticas</h3>
+        <div class="dsv-rs-tiles">
+          <div><b>Enviadas</b><span>${enviadas}</span></div>
+          <div><b>Respondidas</b><span>${totales.completed || 0} <small>(${pctRes(totales.completed || 0, enviadas)}%)</small></span></div>
+          <div><b>Promedio general</b><span>${fmtProm(promedio)} <small>/ 5</small></span></div>
+        </div>
+        ${total > 0 ? `<p class="dsv-rs-charttitle">Distribución de las calificaciones</p>${columnas(dist, total)}` : ""}
+      </section>
+
+      ${(detalle.areas || []).length ? `
+        <section class="dsv-rs-card">
+          <h3 class="dsv-rs-title">Por área responsable</h3>
+          <table class="dsv-rs-mini">
+            <thead><tr><th>Área</th><th>Promedio</th><th>Calificaciones</th><th>Notas bajas</th><th>Motivos más marcados</th></tr></thead>
+            <tbody>
+              ${detalle.areas.map((a) => `
+                <tr>
+                  <td>${esc(a.areaName)}</td>
+                  <td>${estrellasLinea(a.averageScore)} ${fmtProm(a.averageScore)}</td>
+                  <td>${a.ratings}</td>
+                  <td>${a.lowCount}</td>
+                  <td class="dsv-rs-muted">${esc((a.topImprovements || []).map((x) => `${x.label} (${x.total})`).join(" · ") || "—")}</td>
+                </tr>`).join("")}
+            </tbody>
+          </table>
+        </section>` : ""}
+
+      ${(detalle.advisors || []).length ? `
+        <section class="dsv-rs-card">
+          <h3 class="dsv-rs-title">Por asesora <small>solo respuestas ligadas a órdenes</small></h3>
+          <table class="dsv-rs-mini">
+            <thead><tr><th>Asesora</th><th>Promedio</th><th>Calificaciones</th><th>Órdenes evaluadas</th></tr></thead>
+            <tbody>
+              ${detalle.advisors.map((a) => `<tr><td>${esc(a.name)}</td><td>${estrellasLinea(a.averageScore)} ${fmtProm(a.averageScore)}</td><td>${a.ratings}</td><td>${a.works}</td></tr>`).join("")}
+            </tbody>
+          </table>
+        </section>` : ""}
+
+      ${secciones.map((sec) => `${bandaSeccion(sec, sec.useWorks ? "Se evalúa sobre las órdenes" : "")}${sec.questions.map(resumenPregunta).join("")}`).join("")}`;
+  }
+
+  const pagDoc = (indice, total, mover, selector) => `
+    <section class="dsv-rs-card dsv-rs-pager">
+      ${selector}
+      <div class="dsv-rs-pager-nav">
+        <button type="button" class="dsv-rs-arrow" data-act="${mover}" data-arg="-1" ${indice <= 0 ? "disabled" : ""} aria-label="Anterior">${ico("left", 18)}</button>
+        <span><b>${total ? indice + 1 : 0}</b> de ${total}</span>
+        <button type="button" class="dsv-rs-arrow" data-act="${mover}" data-arg="1" ${indice >= total - 1 ? "disabled" : ""} aria-label="Siguiente">${ico("right", 18)}</button>
+      </div>
+    </section>`;
+
+  function vistaPregunta(preguntas) {
+    const indice = Math.max(0, preguntas.findIndex((q) => q.key === state.resDocPregunta));
+    const q = preguntas[indice];
+    if (!q) return `<p class="dsv-rs-none">Esta encuesta no tiene preguntas.</p>`;
+    const grupos = new Map();
+    q.rows.forEach((r) => {
+      if (!grupos.has(r.doctorSurveyInstanceId)) grupos.set(r.doctorSurveyInstanceId, { key: r.doctorSurveyInstanceId, doctorName: r.doctorName, rows: [] });
+      grupos.get(r.doctorSurveyInstanceId).rows.push(r);
+    });
+    const lista = [...grupos.values()];
+
+    return `
+      ${pagDoc(indice, preguntas.length, "doc-mover-pregunta", `
+        <select data-doc-select="pregunta" aria-label="Pregunta">
+          ${preguntas.map((x) => `<option value="${attr(x.key)}" ${x.key === q.key ? "selected" : ""}>${x.number}. ${esc(x.text)}</option>`).join("")}
+        </select>`)}
+      <section class="dsv-rs-card">
+        <small class="dsv-rs-eyebrow">${esc(q.sectionTitle)}</small>
+        <h3>${q.number}. ${esc(q.text)}</h3>
+        ${q.helpText ? `<p class="dsv-rs-sub">${esc(q.helpText)}</p>` : ""}
+        <p class="dsv-rs-sub">${plural(lista.length, "respuesta", "respuestas")}${q.areaName ? ` · Área: ${esc(q.areaName)}` : ""}</p>
+      </section>
+      ${lista.length === 0 ? `<p class="dsv-rs-none">Nadie ha respondido esta pregunta.</p>` : ""}
+      ${lista.map((g) => `
+        <section class="dsv-rs-card">
+          <header class="dsv-rs-qhead">
+            <h3 class="dsv-rs-person-name">${esc(g.doctorName)}</h3>
+            <button type="button" class="dsv-rs-link is-small" data-act="doc-ver-persona" data-arg="${attr(g.key)}">Ver su encuesta</button>
+          </header>
+          <div class="dsv-rs-divider"></div>
+          ${g.rows.map((r) => respuestaForm(q, r, g.rows.length === 1)).join("")}
+        </section>`).join("")}`;
+  }
+
+  function vistaIndividual(detalle, secciones, personas) {
+    const indice = Math.max(0, personas.findIndex((p) => String(p.key) === String(state.resDocPersona)));
+    const p = personas[indice];
+    if (!p) return `<p class="dsv-rs-none">Todavía nadie responde esta encuesta.</p>`;
+    const propias = (q) => q.rows.filter((r) => r.doctorSurveyInstanceId === p.key);
+    const encuesta = detalle.survey || {};
+
+    return `
+      ${pagDoc(indice, personas.length, "doc-mover-persona", `
+        <select data-doc-select="persona" aria-label="Doctor">
+          ${personas.map((x) => `<option value="${attr(x.key)}" ${x.key === p.key ? "selected" : ""}>${esc(doctorTxt(x))}</option>`).join("")}
+        </select>`)}
+      <section class="dsv-rs-card dsv-rs-formtop">
+        <div class="dsv-rs-formtop-meta">
+          <span>${p.ratings > 0 ? `${estrellasLinea(p.average)} ${fmtProm(p.average)} de promedio` : "Sin calificaciones"}</span>
+          <em>Respondió el ${fmtFechaHora(p.finishedAt || p.answeredAt)}</em>
+        </div>
+        <h2>${esc(encuesta.name || "Encuesta")}</h2>
+        ${encuesta.description ? `<p class="dsv-rs-formtop-desc">${esc(encuesta.description)}</p>` : ""}
+        <dl class="dsv-rs-facts">
+          <div><dt>Doctor</dt><dd>${esc(doctorTxt(p))}</dd></div>
+          <div><dt>Período evaluado</dt><dd>${esc((detalle.period || {}).periodLabel || "—")}</dd></div>
+          ${p.clinicNames ? `<div><dt>Clínica</dt><dd>${esc(p.clinicNames)}</dd></div>` : ""}
+          <div><dt>Órdenes del período</dt><dd>${p.worksCount !== undefined ? p.worksCount : p.works || 0}</dd></div>
+          ${p.lowCount > 0 ? `<div><dt>Notas bajas</dt><dd>${p.lowCount}</dd></div>` : ""}
+        </dl>
+        <div class="seg-enlaces">
+          <button class="dl-mini on" type="button" data-act="seg-detalle" data-arg="${attr(p.key)}">Ver detalle por orden</button>
+          <button class="dl-mini" type="button" data-act="seg-historico" data-arg="${attr(p.doctorName || "")}">Ver histórico del doctor</button>
+        </div>
+      </section>
+      ${secciones.map((sec) => {
+        const filasSec = sec.questions.flatMap(propias);
+        const modo = sec.useWorks ? modalidad(filasSec) : null;
+        return `
+          ${bandaSeccion(sec, modo ? `Respondió en modalidad ${MODO_TXT[modo] || modo}` : "")}
+          ${sec.questions.map((q) => {
+            const filas = propias(q);
+            return `
+              <article class="dsv-rs-card">
+                <h3>${q.number}. ${esc(q.text)}${q.required ? `<span class="dsv-rs-req"> *</span>` : ""}</h3>
+                ${q.helpText ? `<p class="dsv-rs-sub">${esc(q.helpText)}</p>` : ""}
+                ${filas.length === 0 ? `<p class="dsv-rs-none is-left">Sin respuesta.</p>` : filas.map((r) => respuestaForm(q, r, filas.length === 1)).join("")}
+              </article>`;
+          }).join("")}`;
+      }).join("")}`;
+  }
+
+  function vistaDoctores(detalle, respondidas) {
+    const lista = detalle.instances || [];
+    return `
+      <section class="dsv-rs-card">
+        <h3 class="dsv-rs-title">Doctores a los que se envió <small>clic en una respondida para ver su encuesta</small></h3>
+        <table class="dsv-rs-mini is-clickable">
+          <thead><tr><th>Doctor</th><th>Clínica</th><th>Órdenes</th><th>Enviada</th><th>Respondida</th><th>Promedio</th><th>Estado</th></tr></thead>
+          <tbody>
+            ${lista.length === 0 ? `<tr><td colspan="7">No se envió a ningún doctor.</td></tr>` : lista.map((i) => {
+              const puede = respondidas.has(i.doctorSurveyInstanceId);
+              return `
+              <tr class="${puede ? "can-open" : ""}" ${puede ? `data-row-open="doc-ver-persona" data-row-arg="${attr(i.doctorSurveyInstanceId)}" title="Ver su encuesta"` : ""}>
+                <td>${esc(doctorTxt(i))}</td>
+                <td class="dsv-rs-muted">${esc(i.clinicNames || "—")}</td>
+                <td>${i.worksCount || 0}</td>
+                <td>${fmtFechaHora(i.sentAt)}</td>
+                <td>${fmtFechaHora(i.finishedAt)}</td>
+                <td>${i.averageScore === null || i.averageScore === undefined ? "—" : fmtProm(i.averageScore)}</td>
+                <td><span class="dsv-rs-pill is-${tonoInst(i.status)}">${esc(ESTADO_INST[i.status] || i.status)}</span></td>
+              </tr>`;
+            }).join("")}
+          </tbody>
+        </table>
+      </section>`;
+  }
+
+  /* "Ver en tabla": todas las respuestas, para revisar o exportar */
+  function vistaTabla(detalle) {
+    const rows = detalle.rows || [];
+    return `
+      <div class="dsv-rs-wide">
+        <section class="dl-card">
+          <div class="dl-tabs-actions" style="justify-content:flex-end;padding:6px 8px"><button type="button" class="dl-tab-action" data-act="doc-exportar">${ico("download")} Exportar Excel</button></div>
+          <div class="dl-table-wrap">
+            <table class="dl-table">
+              <thead><tr><th>Doctor</th><th>Categoría</th><th>Pregunta</th><th>Área</th><th>Calificación</th><th>Nivel</th><th>Órdenes</th><th>Asesora</th><th>Motivos</th><th>Comentario</th><th>Fecha</th></tr></thead>
+              <tbody>
+                ${rows.length === 0 ? `<tr><td colspan="11">Todavía no hay respuestas.</td></tr>` : rows.map((r) => `
+                  <tr>
+                    <td><b>${esc(r.doctorName)}</b><br><small>${esc(r.periodLabel || "")}</small></td>
+                    <td>${esc(r.sectionTitle || "—")}</td>
+                    <td class="wk-comment" style="font-style:normal">${esc(r.questionText)}</td>
+                    <td>${esc(r.areaName || "—")}</td>
+                    <td>${r.score ? `<span class="dl-badge ${r.isLowScore ? "bad" : "ok"}">${r.score} ★</span>` : esc(r.textValue || (r.choiceOptions || []).join(", ") || "—")}</td>
+                    <td><span class="dl-badge ${r.answerLevel === "GENERAL" ? "" : "pink"}">${esc(NIVEL_TXT[r.answerLevel] || r.answerLevel)}</span></td>
+                    <td>${esc((r.workCodes || []).join(", ") || "—")}</td>
+                    <td>${esc((r.advisors || []).join(", ") || "—")}</td>
+                    <td>${esc([...(r.improvementOptions || []), ...(r.valueOptions || [])].join(", ") || "—")}</td>
+                    <td>${esc(r.comment || "—")}</td>
+                    <td>${fmtFechaHora(r.answeredAt)}</td>
+                  </tr>`).join("")}
+              </tbody>
+            </table>
+          </div>
+          <div class="dl-table-foot"><span>${rows.length} respuesta(s)</span></div>
+        </section>
+      </div>`;
+  }
+
+  function exportarDoctores() {
+    const d = state.resDocDetalle;
+    if (!d) return;
+    descargarCSV(
+      "Respuestas_encuesta_doctores.csv",
+      ["DOCTOR", "PERIODO", "CATEGORIA", "PREGUNTA", "AREA", "CALIFICACION", "NIVEL", "ORDENES", "ASESORA", "MOTIVOS", "COMENTARIO", "FECHA"],
+      (d.rows || []).map((r) => [
+        r.doctorName, r.periodLabel, r.sectionTitle, r.questionText, r.areaName,
+        r.score || r.textValue || (r.choiceOptions || []).join(", "), NIVEL_TXT[r.answerLevel] || r.answerLevel,
+        (r.workCodes || []).join(", "), (r.advisors || []).join(", "),
+        [...(r.improvementOptions || []), ...(r.valueOptions || [])].join(", "), r.comment, fmtFechaHora(r.answeredAt),
+      ])
+    );
+  }
+
+  const TABS_DOC = [["summary", "Resumen"], ["question", "Pregunta"], ["person", "Individual"], ["doctors", "Doctores"]];
+
+  function renderDoctorDetalle() {
+    const resumen = state.resDoc || {};
+    const detalle = state.resDocDetalle;
+    const tab = state.resDocTab || "summary";
+    const secciones = detalle ? modeloDoctores(detalle) : [];
+    const preguntas = secciones.flatMap((s) => s.questions);
+    const personas = detalle ? respondieron(detalle) : [];
+    const respondidas = new Set(personas.map((p) => p.key));
+    const periodo = (detalle && detalle.period) || resumen;
+    const totales = (detalle && detalle.totals) || {};
+    const enviadas = totales.sent || totales.instances || resumen.sentCount || resumen.instancesCount || 0;
+    const cuantas = detalle ? Math.max(personas.length, totales.completed || 0) : resumen.completedCount || 0;
+    const titulo = [(detalle && detalle.survey && detalle.survey.name) || resumen.surveyName, periodo.periodLabel].filter(Boolean).join(" · ");
+    const estado = periodo.status === "CLOSED" ? "período cerrado" : periodo.availableTo ? `abierta hasta el ${fmtFechaHora(periodo.availableTo)}` : "abierta";
+
+    let cuerpo;
+    if (!detalle) cuerpo = `<p class="dsv-rs-none">Cargando respuestas…</p>`;
+    else if (tab === "table") cuerpo = vistaTabla(detalle);
+    else if (tab === "question") cuerpo = vistaPregunta(preguntas);
+    else if (tab === "person") cuerpo = vistaIndividual(detalle, secciones, personas);
+    else if (tab === "doctors") cuerpo = vistaDoctores(detalle, respondidas);
+    else cuerpo = vistaResumen(detalle, secciones);
+
+    return `
+      ${tabsResultados("doctores")}
+      <div class="dsv-page">
+        <div class="dsv-rs dsv-rs-detail">
+          <button type="button" class="dsv-rs-back" data-act="doc-volver">${ico("back")} Encuestas enviadas</button>
+          <section class="dsv-rs-card dsv-rs-head">
+            <div class="dsv-rs-head-top">
+              <div>
+                <small class="dsv-rs-eyebrow">${esc(titulo)}</small>
+                <h2>${plural(cuantas, "respuesta", "respuestas")}</h2>
+                <p class="dsv-rs-sub">de ${plural(enviadas, "encuesta enviada", "encuestas enviadas")} · ${pctRes(cuantas, enviadas)}% de respuesta · ${estado}</p>
+              </div>
+              <button type="button" class="dsv-rs-link" data-act="doc-tab" data-arg="${tab === "table" ? "summary" : "table"}">${ico("sheet", 15)} ${tab === "table" ? "Volver al detalle" : "Ver en tabla"}</button>
+            </div>
+            <div class="dsv-rs-tabs" role="tablist">
+              ${TABS_DOC.map(([clave, nombre]) => `<button type="button" role="tab" aria-selected="${tab === clave}" class="${tab === clave ? "is-active" : ""}" data-act="doc-tab" data-arg="${clave}">${nombre}</button>`).join("")}
+            </div>
+          </section>
+          ${cuerpo}
+        </div>
+      </div>`;
+  }
+
+  function renderDoctoresLista() {
+    const todas = state.resDoctores || [];
+    const filtro = state.resDocFiltro || "";
+    const encuestas = [...new Map(todas.map((p) => [p.doctorSurveyId, p.surveyName])).entries()];
+    const termino = String(state.resDocBuscar || "").trim().toLowerCase();
+    const visibles = (filtro ? todas.filter((p) => String(p.doctorSurveyId) === String(filtro)) : todas)
+      .filter((p) => !termino || [p.surveyName, p.periodLabel].some((t) => String(t || "").toLowerCase().includes(termino)));
+
+    /* Datatable: orden por columna y páginas de 50 */
+    const orden = state.resDocOrden || { col: "enviada", dir: "desc" };
+    const valorDe = {
+      encuesta: (p) => String(p.surveyName || "").toLowerCase(),
+      periodo: (p) => String(p.period || ""),
+      enviada: (p) => String(DL.aISO(p.generatedAt) || p.generatedAt || ""),
+      cierre: (p) => String(p.availableTo || ""),
+      doctores: (p) => p.sentCount || p.instancesCount || 0,
+      respondidas: (p) => p.completedCount || 0,
+      promedio: (p) => (p.averageScore === null || p.averageScore === undefined ? -1 : Number(p.averageScore)),
+      estado: (p) => String(p.status || ""),
+    }[orden.col] || ((p) => 0);
+    const ordenadas = visibles.slice().sort((a, b) => {
+      const x = valorDe(a);
+      const y = valorDe(b);
+      return (x > y ? 1 : x < y ? -1 : 0) * (orden.dir === "asc" ? 1 : -1);
+    });
+    const POR_PAGINA = 50;
+    const paginas = Math.max(1, Math.ceil(ordenadas.length / POR_PAGINA));
+    const pagina = Math.min(Math.max(1, state.resDocPagina || 1), paginas);
+    const inicio = (pagina - 1) * POR_PAGINA;
+    const pagRows = ordenadas.slice(inicio, inicio + POR_PAGINA);
+    const th = (col, texto) => `<th class="dsv-rs-sort ${orden.col === col ? `is-${orden.dir}` : ""}" data-act="doc-orden" data-arg="${col}" title="Ordenar">${texto}</th>`;
+    let enviadas = 0;
+    let completas = 0;
+    let suma = 0;
+    visibles.forEach((p) => {
+      enviadas += p.sentCount || p.instancesCount || 0;
+      completas += p.completedCount || 0;
+      if (p.averageScore !== null && p.averageScore !== undefined) suma += Number(p.averageScore) * (p.completedCount || 0);
+    });
+    const promedio = completas ? suma / completas : null;
+
+    return `
+      ${tabsResultados("doctores")}
+      <div class="dsv-page">
+        <div class="dsv-rs">
+          <div class="dsv-rs-listhead">
+            <div>
+              <h2>Encuestas enviadas</h2>
+              <p class="dsv-rs-sub">Clic en una encuesta para ver sus respuestas con detalle.</p>
+            </div>
+            <div class="dsv-rs-listtools">
+              <label class="dsv-rs-filter">
+                <span>Buscar</span>
+                <input type="text" id="docBuscar" data-doc-buscar placeholder="Encuesta o período" value="${attr(state.resDocBuscar || "")}">
+              </label>
+            ${encuestas.length > 1 ? `
+              <label class="dsv-rs-filter">
+                <span>Encuesta</span>
+                <select data-doc-select="encuesta">
+                  <option value="">Todas</option>
+                  ${encuestas.map(([id, nombre]) => `<option value="${attr(id)}" ${String(filtro) === String(id) ? "selected" : ""}>${esc(nombre)}</option>`).join("")}
+                </select>
+              </label>` : ""}
+            </div>
+          </div>
+
+          <div class="dsv-rs-tiles is-list">
+            <div><b>Encuestas enviadas</b><span>${visibles.length}</span></div>
+            <div><b>Doctores</b><span>${enviadas}</span></div>
+            <div><b>Respondidas</b><span>${completas} <small>(${pctRes(completas, enviadas)}%)</small></span></div>
+            <div><b>Promedio</b><span>${fmtProm(promedio)} <small>/ 5</small></span></div>
+          </div>
+
+          <section class="dsv-rs-card is-flush">
+            <table class="dsv-rs-mini is-clickable is-list">
+              <thead><tr>${th("encuesta", "Encuesta")}${th("periodo", "Período evaluado")}${th("enviada", "Enviada")}${th("cierre", "Cierre")}${th("doctores", "Doctores")}${th("respondidas", "Respondidas")}${th("promedio", "Promedio")}${th("estado", "Estado")}<th aria-label="Abrir"></th></tr></thead>
+              <tbody>
+                ${state.resDoctores === null ? `<tr><td colspan="9">Cargando…</td></tr>` : visibles.length === 0 ? `<tr><td colspan="9">${termino ? "Ninguna encuesta coincide con la búsqueda." : "Todavía no se ha enviado ninguna encuesta."}</td></tr>` : pagRows.map((p) => {
+                  const env = p.sentCount || p.instancesCount || 0;
+                  const tasa = pctRes(p.completedCount || 0, env);
+                  return `
+                  <tr class="can-open" data-row-open="doc-abrir" data-row-arg="${attr(p.doctorSurveyPeriodId)}" title="Ver respuestas">
+                    <td>${esc(p.surveyName)}</td>
+                    <td>${esc(p.periodLabel)}</td>
+                    <td>${fmtFechaHora(p.generatedAt)}</td>
+                    <td>${fmtFechaHora(p.availableTo)}</td>
+                    <td>${env}</td>
+                    <td>
+                      <div class="dsv-rs-rate" title="${p.completedCount || 0} de ${env} (${tasa}%)">
+                        <span>${p.completedCount || 0} <small>(${tasa}%)</small></span>
+                        <i><u style="width:${tasa}%"></u></i>
+                      </div>
+                    </td>
+                    <td>${p.averageScore === null || p.averageScore === undefined ? "—" : `${estrellasLinea(p.averageScore)} ${fmtProm(p.averageScore)}`}</td>
+                    <td><span class="dsv-rs-pill ${p.status === "CLOSED" ? "is-off" : "is-ok"}">${p.status === "CLOSED" ? "Cerrada" : "Abierta"}</span></td>
+                    <td class="dsv-rs-chev">${ico("right", 15)}</td>
+                  </tr>`;
+                }).join("")}
+              </tbody>
+            </table>
+            <div class="dl-table-foot">
+              <span>${visibles.length === 0 ? "Sin registros" : `Mostrando ${inicio + 1} a ${Math.min(inicio + POR_PAGINA, visibles.length)} de ${visibles.length} registros`}${visibles.length !== todas.length ? ` (de ${todas.length} en total)` : ""}</span>
+              ${paginador(pagina, paginas, "data-doc-pagina")}
+            </div>
+          </section>
+        </div>
+        </div>
+      </div>`;
+  }
+
+  /* ==================================================================
+     Seguimiento y consulta de las encuestas a doctores
+       - Envíos: seguimiento operativo (WhatsApp aparte del estado de
+         la encuesta).
+       - Respuestas: filtros, búsqueda por orden y alertas de atención.
+       - Detalle: General / En conjunto / Trabajos específicos.
+       - Histórico del doctor: su evolución por período.
+     Todo es de consulta: nada de aquí cambia lo que respondió el doctor.
+     ================================================================== */
+  const SEG_ESTADOS = [
+    ["GENERADA", "Generada", "off", "Creada, todavía no se envía"],
+    ["ENVIADA", "Enviada", "info", "Le llegó el enlace y no lo ha abierto"],
+    ["PENDIENTE", "Pendiente", "warn", "Abrió el enlace y no ha terminado"],
+    ["RESPONDIDA", "Respondida", "ok", "Terminó la encuesta"],
+    ["VENCIDA", "Vencida", "bad", "Cerró sin respuesta completa"],
+  ];
+  const SEG_TONO = Object.fromEntries(SEG_ESTADOS.map(([k, , t]) => [k, t]));
+  const WA_TONO = { ENVIADO: "ok", SIMULADO: "off", ERROR: "bad", NINGUNO: "off" };
+  const TIPO_EVAL = {
+    GENERAL: ["General", "Opinión global del período, sin órdenes"],
+    INDIVIDUAL: ["Individual", "Solo trabajos concretos"],
+    MIXTA: ["Mixta", "Opinión general y trabajos específicos"],
+  };
+  const NIVEL_SEG = { general: "General", group: "En conjunto", work: "Por orden" };
+
+  const segPill = (clave, texto, nota) =>
+    `<span class="dl-badge ${SEG_TONO[clave] || "off"}" ${nota ? `title="${attr(nota)}"` : ""}>${esc(texto)}</span>`;
+  const tipoPill = (tipo) => {
+    const t = TIPO_EVAL[tipo];
+    return t ? `<span class="seg-tipo is-${tipo.toLowerCase()}" title="${attr(t[1])}">${esc(t[0])}</span>` : "—";
+  };
+  const notaSeg = (v) =>
+    v === null || v === undefined
+      ? "—"
+      : `<span class="seg-nota ${Number(v) <= 3 ? "is-baja" : ""}">${ico("star", 12)} ${fmtProm(v, 1)}</span>`;
+  /* Marca de atención: 1-3 estrellas en rojo, comentarios en azul. No crea incidencias. */
+  const marcaAtencion = (bajas, comentarios) =>
+    !bajas && !comentarios
+      ? `<span class="seg-ok-dot" title="Sin alertas">·</span>`
+      : `<span class="seg-alerta">
+          ${bajas ? `<span class="seg-flag is-baja" title="${bajas} calificación(es) de 1 a 3 estrellas">${ico("shield", 12)} ${bajas}</span>` : ""}
+          ${comentarios ? `<span class="seg-flag is-coment" title="${comentarios} comentario(s)">${ico("message", 12)} ${comentarios}</span>` : ""}
+        </span>`;
+  const fechaSeg = (v) => (v ? fmtFechaHora(v) : "—");
+
+  async function cargarSeguimiento(surveyId) {
+    if (!surveyId || state.esNueva) {
+      state.seg = [];
+      return;
+    }
+    state.seg = await DL.api.seguimiento(surveyId);
+  }
+  async function cargarRespuestasDoc(surveyId) {
+    if (!surveyId || state.esNueva) {
+      state.resp = [];
+      return;
+    }
+    state.resp = await DL.api.respuestasDoctores(surveyId);
+  }
+
+  /* Pila para "Regresar" desde el detalle y el histórico */
+  function apilar() {
+    state.segPila = state.segPila || [];
+    state.segPila.push({ view: state.view, editorTab: state.editorTab, module: state.module });
+  }
+  async function regresarSeg() {
+    const atras = (state.segPila || []).pop();
+    if (!atras) return irA("survey-list");
+    state.view = atras.view;
+    state.module = atras.module || "surveys";
+    if (atras.view === "survey-edit") {
+      state.editorTab = atras.editorTab;
+      if (atras.editorTab === "respuestas") await cargarRespuestasDoc(draft().id);
+      if (atras.editorTab === "envios") {
+        state.instancias = await DL.api.instancias(draft().id);
+        await cargarSeguimiento(draft().id);
+        iniciarPoll("editor-envios");
+      }
+    }
+    renderApp();
+  }
+
+  /* ---------------- Envíos: seguimiento operativo ---------------- */
+  const SEG_FILTRO = { periodo: "", buscar: "", estado: "all", whatsapp: "all" };
+  const segFiltro = () => (state.segFiltro = state.segFiltro || Object.assign({}, SEG_FILTRO));
+
+  function cuerpoEnviosDoctores() {
+    const survey = draft();
+    const instancias = state.instancias || [];
+    const filas = state.seg || [];
+    const f = segFiltro();
+    const yaCorrio = instancias.length > 0;
+    const sinEnviar = instancias.filter((item) => item.state === "Generada" && !item.sentAt).length;
+    const rec = survey.reminders || {};
+    const tope = Math.max(1, Number(rec.max) || 2);
+    const recordables = instancias.filter((item) => ["Enviada", "Abierta", "Parcial"].includes(item.state) && Number(item.reminders || 0) < tope).length;
+
+    const periodos = [...new Map(filas.map((r) => [r.period, r.periodLabel])).entries()].sort((a, b) => String(b[0]).localeCompare(String(a[0])));
+    /* Arranca en el período más reciente: es el que se está siguiendo */
+    if (f.periodo === "" && periodos.length) f.periodo = periodos[0][0];
+    const texto = String(f.buscar || "").trim().toUpperCase();
+    const delPeriodo = filas.filter((r) => f.periodo === "all" || f.periodo === "" || r.period === f.periodo);
+    const visibles = delPeriodo
+      .filter((r) => !texto || `${r.doctor} ${r.doctorId} ${r.clinic}`.toUpperCase().includes(texto))
+      .filter((r) => f.estado === "all" || r.status.clave === f.estado)
+      .filter((r) => f.whatsapp === "all" || r.whatsapp.clave === f.whatsapp);
+    const cuenta = (clave) => delPeriodo.filter((r) => r.status.clave === clave).length;
+    const errores = delPeriodo.filter((r) => r.whatsapp.clave === "ERROR").length;
+    const activos = (texto ? 1 : 0) + (f.estado !== "all" ? 1 : 0) + (f.whatsapp !== "all" ? 1 : 0);
+    const opcion = (valor, txt, actual) => `<option value="${attr(valor)}" ${String(actual) === String(valor) ? "selected" : ""}>${esc(txt)}</option>`;
+
+    return `
+      <div class="dercas-ribbon solo-acciones">
+        <div class="ribbon-tags">
+          <button class="btn primary" type="button" data-act="ejecutar-ahora">${yaCorrio ? "Volver a ejecutar (todos)" : "Ejecutar primera vez"}</button>
+          <button class="btn" type="button" data-act="ejecutar-no-enviados">Ejecutar no enviados${sinEnviar ? ` (${sinEnviar})` : ""}</button>
+          <button class="btn" type="button" data-act="recordar" ${recordables ? "" : "disabled"}>Recordar a los que no han contestado${recordables ? ` (${recordables})` : ""}</button>
         </div>
       </div>
 
-      <section class="res-cards">
-        <div class="res-card"><span>Supervisor evaluado</span><b>${esc(r.supervisor || "—")}</b></div>
-        <div class="res-card"><span>Asignados</span><b>${r.asignadas}</b></div>
-        <div class="res-card"><span>Respondieron</span><b>${r.respuestas}</b></div>
-        <div class="res-card res-card--total"><span>Resultado total</span><b>${esc(r.promedio)}</b><i>${esc(r.escala)}</i></div>
-      </section>
+      ${state.esNueva ? `<p class="empty-note">La encuesta todavía no se ha creado. Guárdela primero y podrá ejecutarla desde aquí.</p>` : ""}
 
-      <section class="dl-card">
-        <div class="wk-block-head">
-          <div><b>${esc(r.surveyName)}</b><span>${esc(r.periodLabel)} · ${esc(r.area)} · ${esc(r.origen)}</span></div>
-          <span class="dl-badge ${r.origen === "Motor de encuestas" ? "pink" : "off"}">${esc(r.origen)}</span>
+      <div class="seg">
+        <div class="seg-kpis">
+          ${SEG_ESTADOS.map(([clave, label, tono, ayuda]) => `
+            <button type="button" class="seg-kpi is-${tono} ${f.estado === clave ? "is-on" : ""}" data-act="seg-estado" data-arg="${clave}" title="${attr(ayuda)}">
+              <span>${esc(label)}</span><b>${cuenta(clave)}</b>
+            </button>`).join("")}
+          <button type="button" class="seg-kpi is-bad ${f.whatsapp === "ERROR" ? "is-on" : ""}" data-act="seg-wa-error" title="Mensajes de WhatsApp que no se pudieron entregar">
+            <span>WhatsApp con error</span><b>${errores}</b>
+          </button>
         </div>
-        <div class="dl-table-wrap">
-          <table class="dl-table">
-            <thead><tr><th>Colaborador</th><th>Puesto</th><th>Correo</th><th>Estado</th><th>Promedio</th><th>Respuestas</th></tr></thead>
-            <tbody>
-              ${(r.colaboradores || []).map((c) => `
-                <tr>
-                  <td><b>${esc(c.name)}</b></td>
-                  <td>${esc(c.position || "—")}</td>
-                  <td>${esc(c.email || "—")}</td>
-                  <td><span class="dl-badge ${c.estado === "Respondida" ? "ok" : "warn"}">${esc(c.estado)}</span></td>
-                  <td>${c.promedio === "—" ? "—" : `<span class="dl-badge ${Number(c.promedio) >= 4 ? "ok" : "bad"}">★ ${esc(c.promedio)}</span>`}</td>
-                  <td>${c.respuestas}</td>
-                </tr>`).join("")}
-            </tbody>
-          </table>
-        </div>
-      </section>
 
-      <section class="dl-card">
-        <div class="wk-block-head"><div><b>Promedio por pregunta</b><span>Así respondió el equipo cada punto de la encuesta.</span></div></div>
-        <div class="dl-table-wrap">
-          <table class="dl-table">
-            <thead><tr><th>Pregunta</th><th>Promedio</th><th>Respuestas</th></tr></thead>
-            <tbody>
-              ${(r.preguntas || []).map((q, i) => `
-                <tr>
-                  <td class="wk-comment"><b>${i + 1}.</b> ${esc(q.texto)}</td>
-                  <td><b class="${Number(q.promedio) < 4 ? "wk-bad" : "wk-good"}">${esc(q.promedio)}</b></td>
-                  <td>${q.respuestas}</td>
-                </tr>`).join("")}
-            </tbody>
-          </table>
+        <div class="seg-filtros">
+          <label class="seg-campo"><span>Período</span>
+            <select data-seg-filtro="periodo">${opcion("all", "Todos", f.periodo)}${periodos.map(([p, l]) => opcion(p, l, f.periodo)).join("")}</select>
+          </label>
+          <label class="seg-campo is-ancho"><span>Doctor o ID</span>
+            <input id="segBuscar" type="text" placeholder="Nombre, ID (DR-…) o clínica" value="${attr(f.buscar)}" data-seg-filtro="buscar">
+          </label>
+          <label class="seg-campo"><span>Estado de la encuesta</span>
+            <select data-seg-filtro="estado">${opcion("all", "Todos", f.estado)}${SEG_ESTADOS.map(([k, l]) => opcion(k, l, f.estado)).join("")}</select>
+          </label>
+          <label class="seg-campo"><span>WhatsApp</span>
+            <select data-seg-filtro="whatsapp">${opcion("all", "Todos", f.whatsapp)}${opcion("ENVIADO", "Enviado", f.whatsapp)}${opcion("SIMULADO", "Simulado", f.whatsapp)}${opcion("ERROR", "Error", f.whatsapp)}</select>
+          </label>
+          ${activos ? `<button type="button" class="seg-limpiar" data-act="seg-limpiar">${ico("x", 13)} Borrar filtros</button>` : ""}
         </div>
-      </section>
 
-      ${(r.comentarios || []).length ? `
         <section class="dl-card">
-          <div class="wk-block-head"><div><b>Comentarios generales</b><span>Tal como los escribió el personal. Las encuestas internas son anónimas.</span></div></div>
-          <div class="res-comments">
-            ${r.comentarios.map((texto, i) => `<div class="res-comment"><span>COMENTARIO ${i + 1}</span><p>${esc(texto)}</p></div>`).join("")}
+          <div class="dl-table-wrap">
+            <table class="dl-table seg-tabla">
+              <thead><tr>
+                <th>Doctor</th><th>Período</th><th>Trabajos</th><th>Fecha de envío</th><th>WhatsApp</th>
+                <th>Recordatorio</th><th>Estado encuesta</th><th>Fecha de respuesta</th><th class="dl-col-opts">Acciones</th>
+              </tr></thead>
+              <tbody>
+                ${state.seg === null || state.seg === undefined
+                  ? `<tr><td colspan="9">Cargando…</td></tr>`
+                  : filas.length === 0
+                    ? `<tr><td colspan="9">Aún no hay envíos. Pulse <b>Ejecutar primera vez</b>.</td></tr>`
+                    : visibles.length === 0
+                      ? `<tr><td colspan="9">Ningún envío coincide con los filtros.</td></tr>`
+                      : visibles.map((r) => `
+                        <tr>
+                          <td><div class="seg-doc"><b>${esc(r.doctor)}</b><span>${esc(r.doctorId)}${r.clinic ? ` · ${esc(r.clinic)}` : ""}</span></div></td>
+                          <td>${esc(r.periodLabel)}</td>
+                          <td class="seg-num">${r.worksCount}</td>
+                          <td>${fechaSeg(r.sentAt)}</td>
+                          <td><span class="dl-badge ${WA_TONO[r.whatsapp.clave] || "off"}" ${r.whatsapp.detalle ? `title="${attr(r.whatsapp.detalle)}"` : ""}>${esc(r.whatsapp.texto)}</span></td>
+                          <td>${r.reminders
+                            ? `<div class="seg-doc"><b>Sí · ${r.reminders} de ${r.remindersMax}</b><span>Último: ${fechaSeg(r.lastReminderAt)}</span></div>`
+                            : `<span class="seg-muted">No</span>`}</td>
+                          <td><div class="seg-doc">${segPill(r.status.clave, r.status.texto, r.status.nota)}<span>${esc(r.status.nota)}</span></div></td>
+                          <td>${fechaSeg(r.answeredAt)}</td>
+                          <td class="dl-col-opts">
+                            ${r.answered ? `<button class="dl-mini on" type="button" data-act="seg-detalle" data-arg="${attr(r.instanceId)}">Ver respuesta</button>` : ""}
+                            <button class="dl-mini" type="button" data-act="seg-historico" data-arg="${attr(r.doctorKey)}" title="Histórico del doctor">Histórico</button>
+                            ${r.answered || r.status.clave === "VENCIDA" ? "" : `<button class="dl-mini" type="button" data-act="open-instance" data-arg="${attr(r.instanceId)}">Abrir</button>`}
+                            <button class="dl-mini" type="button" data-act="ver-mensaje" data-arg="${attr(r.instanceId)}">Mensaje</button>
+                          </td>
+                        </tr>`).join("")}
+              </tbody>
+            </table>
           </div>
-        </section>` : ""}`;
+          <div class="dl-table-foot"><span>${visibles.length} de ${filas.length} envío(s) · WhatsApp muestra la comunicación; el estado de la encuesta, lo que hizo el doctor. Se actualiza sola cada 4 segundos.</span></div>
+        </section>
+      </div>`;
+  }
+
+  /* ---------------- Respuestas: consulta operativa ---------------- */
+  const RESP_FILTRO = { periodo: "all", doctor: "", orden: "", area: "all", categoria: "all", nota: "all", comentario: "all", tipo: "all", atencion: false };
+  const respFiltro = () => (state.respFiltro = state.respFiltro || Object.assign({}, RESP_FILTRO));
+
+  /* ¿Dónde aparece la orden buscada dentro de esta respuesta? */
+  function dondeOrden(r, orden) {
+    if (!orden) return null;
+    const coincide = (id) => String(id).includes(orden);
+    const enAnswers = (nivel) => r.answers.some((a) => a.level === nivel && a.orders.some((o) => coincide(o.workId) || coincide(o.code)));
+    if (enAnswers("work")) return { tono: "ok", texto: "Evaluada individualmente" };
+    if (enAnswers("group")) return { tono: "info", texto: "Evaluada en conjunto" };
+    if ((r.workIds || []).some(coincide)) return { tono: "off", texto: "En el período (opinión general)" };
+    return null;
+  }
+
+  function respuestasFiltradas() {
+    const f = respFiltro();
+    const doctor = String(f.doctor || "").trim().toUpperCase();
+    const orden = String(f.orden || "").replace(/\s/g, "");
+    return (state.resp || []).filter((r) => {
+      if (f.periodo !== "all" && r.period !== f.periodo) return false;
+      if (doctor && !`${r.doctor} ${r.doctorId} ${r.clinic}`.toUpperCase().includes(doctor)) return false;
+      if (orden && !dondeOrden(r, orden)) return false;
+      if (f.tipo !== "all" && r.type !== f.tipo) return false;
+      if (f.atencion && !r.attention) return false;
+      if (f.comentario === "con" && !r.commentCount) return false;
+      if (f.comentario === "sin" && r.commentCount) return false;
+      /* Área, categoría y calificación deben cumplirse en una misma pregunta */
+      if (f.area !== "all" || f.categoria !== "all" || f.nota !== "all") {
+        return r.answers.some((a) =>
+          (f.area === "all" || a.area === f.area) &&
+          (f.categoria === "all" || a.category === f.categoria) &&
+          (f.nota === "all" || (f.nota === "baja" ? a.low : Number(a.score) === Number(f.nota)))
+        );
+      }
+      return true;
+    });
+  }
+
+  function cuerpoRespuestasDoctores() {
+    const todas = state.resp;
+    const f = respFiltro();
+    const lista = respuestasFiltradas();
+    const fuente = todas || [];
+    const periodos = [...new Map(fuente.map((r) => [r.period, r.periodLabel])).entries()].sort((a, b) => String(b[0]).localeCompare(String(a[0])));
+    const unicos = (fn) => [...new Set(fuente.flatMap((r) => r.answers.map(fn)).filter(Boolean))].sort((a, b) => a.localeCompare(b, "es"));
+    const areas = unicos((a) => a.area);
+    const categorias = unicos((a) => a.category);
+    const orden = String(f.orden || "").replace(/\s/g, "");
+    const conNota = lista.filter((r) => r.average !== null);
+    const prom = conNota.length ? conNota.reduce((t, r) => t + r.average, 0) / conNota.length : null;
+    const atencion = fuente.filter((r) => r.attention).length;
+    const activos = Object.keys(RESP_FILTRO).filter((k) => String(f[k]) !== String(RESP_FILTRO[k])).length;
+    const opcion = (valor, txt, actual) => `<option value="${attr(valor)}" ${String(actual) === String(valor) ? "selected" : ""}>${esc(txt)}</option>`;
+
+    return `
+      <div class="seg">
+        <div class="seg-filtros is-grid">
+          <label class="seg-campo"><span>Período</span>
+            <select data-resp-filtro="periodo">${opcion("all", "Todos", f.periodo)}${periodos.map(([p, l]) => opcion(p, l, f.periodo)).join("")}</select>
+          </label>
+          <label class="seg-campo is-ancho"><span>Doctor o ID</span>
+            <input id="respDoctor" type="text" placeholder="Nombre, ID (DR-…) o clínica" value="${attr(f.doctor)}" data-resp-filtro="doctor">
+          </label>
+          <label class="seg-campo"><span>No. de orden</span>
+            <input id="respOrden" type="text" inputmode="numeric" placeholder="Ej. 202609494" value="${attr(f.orden)}" data-resp-filtro="orden">
+          </label>
+          <label class="seg-campo"><span>Tipo de evaluación</span>
+            <select data-resp-filtro="tipo">${opcion("all", "Todos", f.tipo)}${Object.entries(TIPO_EVAL).map(([k, v]) => opcion(k, v[0], f.tipo)).join("")}</select>
+          </label>
+          <label class="seg-campo"><span>Área</span>
+            <select data-resp-filtro="area">${opcion("all", "Todas", f.area)}${areas.map((a) => opcion(a, a, f.area)).join("")}</select>
+          </label>
+          <label class="seg-campo"><span>Categoría</span>
+            <select data-resp-filtro="categoria">${opcion("all", "Todas", f.categoria)}${categorias.map((c) => opcion(c, c, f.categoria)).join("")}</select>
+          </label>
+          <label class="seg-campo"><span>Calificación</span>
+            <select data-resp-filtro="nota">${opcion("all", "Todas", f.nota)}${opcion("baja", "1 a 3 estrellas", f.nota)}${[5, 4, 3, 2, 1].map((n) => opcion(n, `${n} ${n === 1 ? "estrella" : "estrellas"}`, f.nota)).join("")}</select>
+          </label>
+          <label class="seg-campo"><span>Comentario</span>
+            <select data-resp-filtro="comentario">${opcion("all", "Todos", f.comentario)}${opcion("con", "Con comentario", f.comentario)}${opcion("sin", "Sin comentario", f.comentario)}</select>
+          </label>
+        </div>
+
+        <div class="seg-barra">
+          <button type="button" class="seg-chip ${f.atencion ? "is-on" : ""}" data-act="resp-atencion">${ico("shield", 13)} Requieren atención <b>${atencion}</b></button>
+          <span class="seg-resumen">${lista.length} de ${fuente.length} respuesta(s) · Promedio ${fmtProm(prom, 2)}</span>
+          ${activos ? `<button type="button" class="seg-limpiar" data-act="resp-limpiar">${ico("x", 13)} Borrar filtros</button>` : ""}
+        </div>
+
+        <section class="dl-card">
+          <div class="dl-table-wrap">
+            <table class="dl-table seg-tabla">
+              <thead><tr>
+                <th class="seg-col-alerta" title="1 a 3 estrellas o comentario">Atención</th><th>Doctor</th><th>Período</th><th>Respondió</th><th>Tipo</th>
+                <th>Trabajos del período</th><th>Evaluados por orden</th><th>Promedio</th>${orden ? "<th>Orden buscada</th>" : ""}<th class="dl-col-opts">Acciones</th>
+              </tr></thead>
+              <tbody>
+                ${todas === null || todas === undefined
+                  ? `<tr><td colspan="10">Cargando…</td></tr>`
+                  : fuente.length === 0
+                    ? `<tr><td colspan="10">Todavía nadie responde esta encuesta.</td></tr>`
+                    : lista.length === 0
+                      ? `<tr><td colspan="10">Ninguna respuesta coincide con los filtros${orden ? `: la orden <b>${esc(orden)}</b> no aparece en ninguna respuesta` : ""}.</td></tr>`
+                      : lista.map((r) => {
+                        const hallazgo = dondeOrden(r, orden);
+                        return `
+                        <tr class="dl-row-link ${r.attention ? "seg-fila-alerta" : ""}" data-row-open="seg-detalle" data-row-arg="${attr(r.instanceId)}" title="Ver la respuesta">
+                          <td class="seg-col-alerta">${marcaAtencion(r.lowCount, r.commentCount)}</td>
+                          <td><div class="seg-doc"><b>${esc(r.doctor)}</b><span>${esc(r.doctorId)}${r.clinic ? ` · ${esc(r.clinic)}` : ""}</span></div></td>
+                          <td>${esc(r.periodLabel)}</td>
+                          <td>${fechaSeg(r.answeredAt)}</td>
+                          <td>${tipoPill(r.type)}</td>
+                          <td class="seg-num">${r.worksInPeriod}</td>
+                          <td class="seg-num">${r.worksEvaluated}${r.worksGrouped ? ` <span class="seg-muted" title="Evaluados en conjunto">+${r.worksGrouped}</span>` : ""}</td>
+                          <td>${notaSeg(r.average)}</td>
+                          ${orden ? `<td>${hallazgo ? `<span class="dl-badge ${hallazgo.tono}">${esc(hallazgo.texto)}</span>` : "—"}</td>` : ""}
+                          <td class="dl-col-opts">
+                            <button class="dl-mini on" type="button" data-act="seg-detalle" data-arg="${attr(r.instanceId)}">Ver detalle</button>
+                            <button class="dl-mini" type="button" data-act="seg-historico" data-arg="${attr(r.doctorKey)}">Histórico</button>
+                          </td>
+                        </tr>`;
+                      }).join("")}
+              </tbody>
+            </table>
+          </div>
+          <div class="dl-table-foot"><span>Atención: ${ico("shield", 11)} calificaciones de 1 a 3 estrellas · ${ico("message", 11)} comentarios escritos por el doctor. Es solo para revisar: no crea incidencias.</span></div>
+        </section>
+      </div>`;
+  }
+
+  /* ---------------- Detalle de una respuesta ---------------- */
+  function filaPregunta(a) {
+    const alerta = a.low || a.hasComment;
+    return `
+      <div class="seg-q ${a.low ? "is-baja" : ""}">
+        <div class="seg-q-main">
+          <b>${esc(a.question)}</b>
+          <span>${esc([a.area, a.category].filter(Boolean).join(" · "))}</span>
+        </div>
+        <div class="seg-q-nota">
+          ${a.score
+            ? `${estrellasLinea(a.score)} <b>${a.score}/5</b>`
+            : a.value
+              ? `<span class="seg-valor">${esc(a.value)}</span>`
+              : "—"}
+        </div>
+        <div class="seg-q-extra">
+          ${a.reasons && a.reasons.length ? `<div class="seg-motivos">${a.reasons.map((m) => `<span>${esc(m)}</span>`).join("")}</div>` : ""}
+          ${a.comment ? `<p class="seg-comentario">“${esc(a.comment)}”</p>` : ""}
+          ${a.evidence && a.evidence.length ? `<span class="seg-muted">Evidencia: ${a.evidence.length} archivo(s)</span>` : ""}
+          ${alerta ? `<span class="seg-flag ${a.low ? "is-baja" : "is-coment"}">${a.low ? "Calificación baja" : "Con comentario"}</span>` : ""}
+          <span class="seg-ref" title="Identificador de la respuesta; servirá para ligarla a una incidencia más adelante">Ref. ${esc(a.answerId)}</span>
+        </div>
+      </div>`;
+  }
+
+  function renderRespuestaDetalle() {
+    const d = state.respDet;
+    if (!d) return `<div class="seg"><p class="empty-note">Cargando la respuesta…</p></div>`;
+    const verPaciente = esAdmin();
+    const prom = (lista) => {
+      const n = lista.filter((a) => a.score).map((a) => a.score);
+      return n.length ? n.reduce((x, y) => x + y, 0) / n.length : null;
+    };
+    const ficha = (w) => `
+      <dl class="seg-ficha">
+        <div><dt>Orden</dt><dd><b>${esc(w.code)}</b></dd></div>
+        <div><dt>Paciente</dt><dd>${verPaciente ? esc(w.patient || "—") : `<span class="seg-muted">Restringido</span>`}</dd></div>
+        <div><dt>Producto</dt><dd>${esc(w.product || "—")}</dd></div>
+        <div><dt>Fecha</dt><dd>${esc(w.date || "—")}</dd></div>
+        <div><dt>Asesora</dt><dd>${esc(w.advisor || "—")}</dd></div>
+      </dl>`;
+
+    return `
+      <div class="seg seg-detalle">
+        <div class="toolbar-strip seg-top">
+          <div class="seg-top-titulo">
+            <span class="seg-muted">Respuesta de la encuesta</span>
+            <b>${esc(d.surveyName)}</b>
+          </div>
+          <div class="seg-top-acciones">
+            <button class="btn" type="button" data-act="seg-historico" data-arg="${attr(d.doctorKey)}">${ico("trending", 14)} Ver histórico del doctor</button>
+            <button class="link-action" type="button" data-act="seg-regresar">Regresar</button>
+          </div>
+        </div>
+
+        <section class="dl-card seg-encabezado">
+          <div class="seg-enc-doc">
+            <h2>${esc(d.doctor)}</h2>
+            <span>${esc(d.doctorId)}${d.clinic ? ` · ${esc(d.clinic)}` : ""}</span>
+          </div>
+          <dl class="seg-enc-datos">
+            <div><dt>Período</dt><dd>${esc(d.periodLabel)}</dd></div>
+            <div><dt>Fecha de respuesta</dt><dd>${fechaSeg(d.answeredAt)}</dd></div>
+            <div><dt>Tipo de evaluación</dt><dd>${tipoPill(d.type)}</dd></div>
+            <div><dt>Trabajos del período</dt><dd>${d.worksInPeriod}</dd></div>
+            <div><dt>Evaluados individualmente</dt><dd>${d.worksEvaluated}${d.worksGrouped ? ` <span class="seg-muted">(+${d.worksGrouped} en conjunto)</span>` : ""}</dd></div>
+            <div><dt>Promedio</dt><dd>${notaSeg(d.average)}</dd></div>
+            <div><dt>Atención</dt><dd>${marcaAtencion(d.lowCount, d.commentCount)}</dd></div>
+          </dl>
+          <p class="seg-candado">${ico("shield", 12)} Solo lectura: la respuesta original del doctor no se modifica desde aquí.</p>
+        </section>
+
+        <h3 class="seg-bloque-titulo">Evaluación general <small>Opinión del doctor sobre el período, sin órdenes asociadas</small></h3>
+        <section class="dl-card seg-bloque">
+          ${d.general.length ? d.general.map(filaPregunta).join("") : `<p class="seg-vacio">El doctor no dio una opinión general en esta encuesta.</p>`}
+        </section>
+
+        ${d.group ? `
+          <h3 class="seg-bloque-titulo">Trabajos evaluados en conjunto <small>Una misma calificación para ${d.group.works.length} orden(es)</small></h3>
+          <section class="dl-card seg-bloque">
+            <div class="seg-chips-ordenes">${d.group.works.map((w) => `<button type="button" class="seg-orden-chip" data-act="work-detail" data-arg="${attr(w.workId)}" title="${attr([w.product, w.date].filter(Boolean).join(" · "))}">${esc(w.code)}</button>`).join("")}</div>
+            ${d.group.answers.map(filaPregunta).join("")}
+          </section>` : ""}
+
+        <h3 class="seg-bloque-titulo">Trabajos específicos evaluados <small>${d.works.length ? `${d.works.length} orden(es), cada una ligada por su ID` : "Ninguna orden se evaluó por separado"}</small></h3>
+        ${d.works.length
+          ? d.works.map((w) => `
+            <section class="dl-card seg-bloque seg-trabajo">
+              <div class="seg-trabajo-head">
+                ${ficha(w)}
+                <div class="seg-trabajo-acc">
+                  ${notaSeg(w.average)}
+                  <button class="dl-mini" type="button" data-act="work-detail" data-arg="${attr(w.workId)}">Ver orden</button>
+                </div>
+              </div>
+              ${w.answers.map(filaPregunta).join("")}
+            </section>`).join("")
+          : `<section class="dl-card seg-bloque"><p class="seg-vacio">${d.type === "GENERAL" ? "Evaluación general: no se asocia a órdenes específicas." : "Sin trabajos evaluados uno por uno."}</p></section>`}
+
+        ${d.notEvaluated && d.notEvaluated.length ? `
+          <p class="seg-muted seg-no-eval">Trabajos del período sin evaluación por separado: ${d.notEvaluated.map((w) => esc(w.code)).join(", ")}</p>` : ""}
+      </div>`;
+  }
+
+  /* ---------------- Histórico del doctor ---------------- */
+  function renderHistoricoDoctor() {
+    const h = state.hist;
+    if (!h) return `<div class="seg"><p class="empty-note">Cargando el histórico…</p></div>`;
+    const tendencia = h.last !== null && h.previous !== null ? h.last - h.previous : null;
+    const cronologico = h.rows.filter((r) => r.answered && r.average !== null).slice().reverse();
+
+    return `
+      <div class="seg seg-detalle">
+        <div class="toolbar-strip seg-top">
+          <div class="seg-top-titulo">
+            <span class="seg-muted">Histórico del doctor</span>
+            <b>${esc(h.doctor)}</b>
+          </div>
+          <div class="seg-top-acciones">
+            <button class="link-action" type="button" data-act="seg-regresar">Regresar</button>
+          </div>
+        </div>
+
+        <section class="dl-card seg-encabezado">
+          <div class="seg-enc-doc">
+            <h2>${esc(h.doctor)}</h2>
+            <span>${esc(h.doctorId)}${h.clinic ? ` · ${esc(h.clinic)}` : ""}</span>
+          </div>
+          <div class="seg-kpis is-static">
+            <div class="seg-kpi"><span>Encuestas recibidas</span><b>${h.received}</b></div>
+            <div class="seg-kpi"><span>Respondidas</span><b>${h.answered}</b></div>
+            <div class="seg-kpi"><span>Promedio histórico</span><b>${fmtProm(h.average, 1)}</b></div>
+            <div class="seg-kpi"><span>Último vs. anterior</span><b class="${!tendencia ? "" : tendencia < 0 ? "seg-baja" : "seg-sube"}">${tendencia === null ? "—" : `${tendencia > 0 ? "▲ +" : tendencia < 0 ? "▼ " : "= "}${fmtProm(tendencia, 1)}`}</b></div>
+            <div class="seg-kpi"><span>Respuestas con atención</span><b>${h.attention}</b></div>
+          </div>
+        </section>
+
+        ${cronologico.length > 1 ? `
+          <section class="dl-card seg-bloque">
+            <h3 class="seg-card-titulo">Promedio por período</h3>
+            <div class="seg-barras" role="img" aria-label="Promedio por período">
+              ${cronologico.map((r) => `
+                <div class="seg-barra-col" title="${attr(`${r.periodLabel}: ${fmtProm(r.average, 1)}`)}">
+                  <span>${fmtProm(r.average, 1)}</span>
+                  <i class="${r.average <= 3 ? "is-baja" : ""}" style="height:${Math.round((r.average / 5) * 100)}%"></i>
+                  <small>${esc(r.periodLabel)}</small>
+                </div>`).join("")}
+            </div>
+          </section>` : ""}
+
+        <section class="dl-card">
+          <div class="dl-table-wrap">
+            <table class="dl-table seg-tabla">
+              <thead><tr><th>Período</th><th>Encuesta</th><th>Fecha respuesta</th><th>Tipo</th><th>Promedio</th><th>Trabajos específicos</th><th>Atención</th><th>Estado</th><th class="dl-col-opts">Acción</th></tr></thead>
+              <tbody>
+                ${h.rows.map((r) => `
+                  <tr ${r.answered ? `class="dl-row-link ${r.attention ? "seg-fila-alerta" : ""}" data-row-open="seg-detalle" data-row-arg="${attr(r.instanceId)}"` : ""}>
+                    <td><b>${esc(r.periodLabel)}</b></td>
+                    <td>${esc(r.surveyName)}</td>
+                    <td>${fechaSeg(r.answeredAt)}</td>
+                    <td>${r.answered ? tipoPill(r.type) : "—"}</td>
+                    <td>${notaSeg(r.average)}</td>
+                    <td class="seg-num" title="Uno por uno: ${r.worksEvaluated || 0} · En conjunto: ${r.worksGrouped || 0}">${r.answered ? (r.worksEvaluated || 0) + (r.worksGrouped || 0) : "—"}</td>
+                    <td>${r.answered ? marcaAtencion(r.lowCount, r.commentCount) : "—"}</td>
+                    <td>${segPill(r.status.clave, r.status.texto, r.status.nota)}</td>
+                    <td class="dl-col-opts">${r.answered ? `<button class="dl-mini on" type="button" data-act="seg-detalle" data-arg="${attr(r.instanceId)}">Ver</button>` : ""}</td>
+                  </tr>`).join("")}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>`;
+  }
+
+  /* Acciones del seguimiento; devuelve true si la atendió */
+  async function accionSeguimiento(act, arg) {
+    switch (act) {
+      case "seg-estado": {
+        const f = segFiltro();
+        f.estado = f.estado === arg ? "all" : arg;
+        renderView();
+        return true;
+      }
+      case "seg-wa-error": {
+        const f = segFiltro();
+        f.whatsapp = f.whatsapp === "ERROR" ? "all" : "ERROR";
+        renderView();
+        return true;
+      }
+      case "seg-limpiar":
+        state.segFiltro = Object.assign({}, SEG_FILTRO);
+        renderView();
+        return true;
+      case "resp-limpiar":
+        state.respFiltro = Object.assign({}, RESP_FILTRO);
+        renderView();
+        return true;
+      case "resp-atencion":
+        respFiltro().atencion = !respFiltro().atencion;
+        renderView();
+        return true;
+      case "seg-detalle": {
+        detenerPoll();
+        if (!["resp-detail"].includes(state.view)) apilar();
+        state.view = "resp-detail";
+        state.module = "surveys";
+        state.respDet = null;
+        renderApp();
+        state.respDet = await DL.api.respuestaDoctor(arg);
+        renderView();
+        window.scrollTo(0, 0);
+        return true;
+      }
+      case "seg-historico": {
+        detenerPoll();
+        apilar();
+        state.view = "doctor-history";
+        state.module = "surveys";
+        state.hist = null;
+        renderApp();
+        state.hist = await DL.api.historicoDoctor(arg);
+        renderView();
+        window.scrollTo(0, 0);
+        return true;
+      }
+      case "seg-regresar":
+        await regresarSeg();
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  /* Filtros del seguimiento y de las respuestas; devuelve true si lo atendió */
+  function cambioSeguimiento(target, escribiendo) {
+    if (target.matches("[data-seg-filtro]")) {
+      const campo = target.dataset.segFiltro;
+      if (escribiendo && target.tagName === "SELECT") return true;
+      segFiltro()[campo] = target.value;
+      if (target.tagName === "INPUT") refrescarListado(target.id);
+      else renderView();
+      return true;
+    }
+    if (target.matches("[data-resp-filtro]")) {
+      const campo = target.dataset.respFiltro;
+      if (escribiendo && target.tagName === "SELECT") return true;
+      respFiltro()[campo] = target.value;
+      if (target.tagName === "INPUT") refrescarListado(target.id);
+      else renderView();
+      return true;
+    }
+    return false;
+  }
+
+  /* ==================================================================
+     DASHBOARD · Encuestas
+     Igual que en el sistema: el módulo Dashboard tiene su menú
+     (Hallazgos, Actitudes, Control Horario, Encuestas). En Encuestas:
+       - Internas: el análisis del sistema (ranking de supervisores,
+         distribución, tasa de respuesta y promedio por área).
+       - Doctores: el tablero de las encuestas externas, con lo que
+         sirve para actuar: dónde se cae la respuesta, qué se califica
+         bajo, por qué, qué asesora y qué doctores hay que atender.
+     ================================================================== */
+  const DASH_MODULOS = [
+    ["hallazgos", "Hallazgos", "chart"],
+    ["actitudes", "Actitudes", "briefcase"],
+    ["control-horario", "Control Horario", "clock"],
+    ["encuestas", "Encuestas", "clipboard"],
+  ];
+  const LS_DASH = "dl_dashboard_encuestas";
+  const DASH_FILTROS = { modulo: "encuestas", tab: "doctores", abiertos: false, buscar: "", anio: "all", mes: "all", area: "all", dPeriodo: "all", dEncuesta: "all", dArea: "all" };
+  const dashFiltros = () => (state.dashF = state.dashF || leerFiltros(LS_DASH, DASH_FILTROS));
+  const guardarDash = () => escribirFiltros(LS_DASH, state.dashF);
+
+  async function cargarDashboard() {
+    const f = dashFiltros();
+    if (f.modulo !== "encuestas") return;
+    if (f.tab === "internas") {
+      state.resultados = await DL.api.resultados();
+      return;
+    }
+    state.dashDoc = await DL.api.tableroDoctores({ periodo: f.dPeriodo, encuesta: f.dEncuesta, area: f.dArea });
+  }
+
+  function renderDashSidebar() {
+    const f = dashFiltros();
+    els.sidebar.innerHTML = `
+      <div class="side-title">DASHBOARD</div>
+      <div class="dsh-menu">
+        ${DASH_MODULOS.map(([clave, nombre, icono]) => `
+          <button type="button" class="dsh-opcion ${f.modulo === clave ? "active" : ""}" data-act="dash-modulo" data-arg="${clave}">
+            <span>${ico(icono, 16)}</span><strong>${nombre}</strong>
+          </button>`).join("")}
+      </div>`;
+  }
+
+  function renderDashboard() {
+    const f = dashFiltros();
+    if (f.modulo !== "encuestas") {
+      const nombre = (DASH_MODULOS.find(([c]) => c === f.modulo) || [])[1] || "";
+      return `<div class="svy-dash"><div class="svy-dash__state">El tablero de <b>${esc(nombre)}</b> vive en el sistema. En el prototipo solo se trabaja el de <b>Encuestas</b>.</div></div>`;
+    }
+    const tabs = [["internas", "Internas"], ["doctores", "Doctores"]];
+    return `
+      <div class="dsh-tabs" role="tablist">
+        ${tabs.map(([clave, nombre]) => `<button type="button" role="tab" aria-selected="${f.tab === clave}" class="${f.tab === clave ? "is-active" : ""}" data-act="dash-tab" data-arg="${clave}">${nombre}</button>`).join("")}
+      </div>
+      ${f.tab === "internas" ? dashInternas() : dashDoctores()}`;
+  }
+
+  /* ---------- Barra horizontal (el mismo renglón del sistema) ---------- */
+  const barra = ({ rango = "", titulo, sub = "", valor, ancho, clase = "primary", tip = "", act = "", arg = "" }) => `
+    <div class="svy-dash__bar-row ${act ? "is-click" : ""}" ${tip ? `title="${attr(tip)}"` : ""} ${act ? `data-act="${act}" data-arg="${attr(arg)}"` : ""}>
+      <div class="svy-dash__bar-rank">${rango}</div>
+      <div class="svy-dash__bar-labels">
+        <div class="svy-dash__bar-main-label">${esc(titulo)}</div>
+        ${sub ? `<div class="svy-dash__bar-sub-label">${sub}</div>` : ""}
+      </div>
+      <div class="svy-dash__bar-track"><div class="svy-dash__bar-fill svy-dash__bar-fill-${clase}" style="width:${Math.max(0, Math.min(100, ancho))}%"></div></div>
+      <div class="svy-dash__bar-value">${valor}</div>
+    </div>`;
+
+  const tarjeta = (icono, titulo, cuerpo, extra = "", ayuda = "") => `
+    <div class="svy-dash__card ${extra}">
+      <div class="svy-dash__card-head">
+        <div class="svy-dash__card-title">${ico(icono, 16)}<span>${titulo}</span></div>
+        ${ayuda ? `<div class="dsh-ayuda">${ayuda}</div>` : ""}
+      </div>
+      ${cuerpo}
+    </div>`;
+
+  const dona = (porcentaje, etiqueta, color = "#d84b91") => `
+    <div class="svy-dash__donut" style="background: conic-gradient(${color} 0% ${porcentaje}%, #e5e7eb ${porcentaje}% 100%)">
+      <div class="svy-dash__donut-inner"><strong>${Math.round(porcentaje)}%</strong><span>${etiqueta}</span></div>
+    </div>`;
+
+  const claseNota = (v) => (v === null || v === undefined ? "primary" : v >= 4.5 ? "excellent" : v >= 3.5 ? "good" : v >= 2.5 ? "regular" : "critical");
+
+  /* ---------- Filtros (Ver filtros, como el sistema) ---------- */
+  function dashFiltrosBarra(campos, activos) {
+    const f = dashFiltros();
+    return `
+      <div class="svy-dash__filters">
+        <div class="svy-dash__filter-toolbar">
+          <button type="button" class="svy-dash__filter-toggle ${f.abiertos ? "is-open" : ""}" data-act="dash-filtros" aria-expanded="${f.abiertos}">
+            ${ico("sliders", 14)}<span>${f.abiertos ? "Ocultar filtros" : "Ver filtros"}</span>
+            ${activos ? `<span class="svy-dash__filter-count">${activos}</span>` : ""}
+            <span class="svy-dash__filter-chevron">${ico("down", 14)}</span>
+          </button>
+          ${activos ? `<button type="button" class="svy-dash__filter-clear" data-act="dash-limpiar">${ico("x", 13)} Borrar filtros</button>` : "<span></span>"}
+          ${f.abiertos ? `<div class="svy-dash__inline-filters">${campos}</div>` : ""}
+        </div>
+      </div>`;
+  }
+
+  const campoSelect = (etiqueta, campo, valor, opciones) => `
+    <div class="svy-dash__filter-field">
+      <label>${etiqueta}</label>
+      <select data-dash-filtro="${campo}">
+        ${opciones.map(([v, t]) => `<option value="${attr(v)}" ${String(valor) === String(v) ? "selected" : ""}>${esc(t)}</option>`).join("")}
+      </select>
+    </div>`;
+
+  /* ---------------- Internas: igual que el sistema ---------------- */
+  function dashInternas() {
+    const f = dashFiltros();
+    const filas = (state.resultados || []).map((r) => ({
+      template: r.surveyName || "Encuesta",
+      area: r.area || "—",
+      supervisor: r.supervisor || "—",
+      anio: anioDe(r),
+      mes: Number(String(r.period || "").slice(5, 7)) || 0,
+      periodo: r.periodLabel || "",
+      asignadas: Number(r.asignadas || 0),
+      respondidas: Number(r.respuestas || 0),
+      nota: r.respuestas && r.promedio !== "—" ? Number(r.promedio) : null,
+    }));
+    const termino = String(f.buscar || "").trim().toLowerCase();
+    const vis = filas.filter((r) =>
+      (!termino || [r.template, r.supervisor, r.area, r.periodo].some((t) => t.toLowerCase().includes(termino))) &&
+      (f.anio === "all" || Number(f.anio) === r.anio) &&
+      (f.mes === "all" || Number(f.mes) === r.mes) &&
+      (f.area === "all" || f.area === r.area));
+
+    const asignadas = vis.reduce((t, r) => t + r.asignadas, 0);
+    const respondidas = vis.reduce((t, r) => t + r.respondidas, 0);
+    const pendientes = Math.max(asignadas - respondidas, 0);
+    const tasa = asignadas ? (respondidas / asignadas) * 100 : 0;
+
+    const promediar = (clave) => {
+      const mapa = new Map();
+      vis.filter((r) => r.nota !== null).forEach((r) => {
+        const k = r[clave];
+        if (!mapa.has(k)) mapa.set(k, []);
+        mapa.get(k).push(r.nota);
+      });
+      return [...mapa.entries()].map(([k, n]) => ({ k, v: n.reduce((a, b) => a + b, 0) / n.length })).sort((a, b) => b.v - a.v);
+    };
+    const ranking = promediar("supervisor").slice(0, 10);
+    const areas = promediar("area");
+    const dist = [["excellent", "Excelente"], ["good", "Bueno"], ["regular", "Regular"], ["critical", "Crítico"]]
+      .map(([k, label]) => ({ k, label, v: vis.filter((r) => r.nota !== null && claseNota(r.nota) === k).length }));
+    const maxDist = Math.max(...dist.map((d) => d.v), 1);
+
+    const anios = [...new Set(filas.map((r) => r.anio).filter(Boolean))].sort((a, b) => b - a);
+    const areasOp = [...new Set(filas.map((r) => r.area).filter(Boolean))].sort();
+    const activos = (termino ? 1 : 0) + (f.anio !== "all" ? 1 : 0) + (f.mes !== "all" ? 1 : 0) + (f.area !== "all" ? 1 : 0);
+
+    return `
+      <div class="svy-dash">
+        ${dashFiltrosBarra(`
+          <div class="svy-dash__filter-field">
+            <label>Buscar</label>
+            <input type="text" id="dashBuscar" data-dash-filtro="buscar" placeholder="Encuesta, área, supervisor o periodo" value="${attr(f.buscar)}">
+          </div>
+          ${campoSelect("Año", "anio", f.anio, [["all", "Todos"], ...anios.map((a) => [a, a])])}
+          ${campoSelect("Mes", "mes", f.mes, [["all", "Todos"], ...MESES_RES.map((m, i) => [i + 1, m])])}
+          ${campoSelect("Área", "area", f.area, [["all", "Todas"], ...areasOp.map((a) => [a, a])])}`, activos)}
+        <div class="svy-dash__grid">
+          ${tarjeta("trending", "Ranking de supervisores", ranking.length
+            ? `<div class="svy-dash__bars">${ranking.map((r, i) => barra({ rango: `#${i + 1}`, titulo: r.k, sub: etiquetaNota(r.v), valor: r.v.toFixed(2), ancho: (r.v / 5) * 100 })).join("")}</div>`
+            : `<div class="svy-dash__empty">No hay suficientes datos para generar el ranking.</div>`)}
+          ${tarjeta("shield", "Distribución de resultados", `<div class="svy-dash__bars">${dist.map((d) => `
+            <div class="svy-dash__bar-row">
+              <div class="svy-dash__tag tag-${d.k}">${d.label}</div>
+              <div class="svy-dash__bar-track"><div class="svy-dash__bar-fill svy-dash__bar-fill-${d.k}" style="width:${(d.v / maxDist) * 100}%"></div></div>
+              <div class="svy-dash__bar-value">${d.v}</div>
+            </div>`).join("")}</div>`)}
+          ${tarjeta("check", "Tasa de respuesta", `
+            <div class="svy-dash__response">
+              ${dona(tasa, "respuesta")}
+              <div class="svy-dash__response-stats">
+                <div class="svy-dash__response-item"><div class="svy-dash__dot dot-answered"></div><div><strong>${respondidas}</strong><span>Respondidas</span></div></div>
+                <div class="svy-dash__response-item"><div class="svy-dash__dot dot-pending"></div><div><strong>${pendientes}</strong><span>No respondidas</span></div></div>
+              </div>
+            </div>`)}
+          ${tarjeta("briefcase", "Promedio por área", areas.length
+            ? `<div class="svy-dash__bars">${areas.map((a) => `
+              <div class="svy-dash__bar-row">
+                <div class="svy-dash__bar-labels svy-dash__bar-labels-area"><div class="svy-dash__bar-main-label">${esc(a.k)}</div></div>
+                <div class="svy-dash__bar-track"><div class="svy-dash__bar-fill svy-dash__bar-fill-area" style="width:${(a.v / 5) * 100}%"></div></div>
+                <div class="svy-dash__bar-value">${a.v.toFixed(2)}</div>
+              </div>`).join("")}</div>`
+            : `<div class="svy-dash__empty">No hay suficientes datos por área.</div>`)}
+        </div>
+        <div class="svy-dash__summary">
+          <div class="svy-dash__summary-card"><span class="svy-dash__summary-label">Encuestas aplicadas</span><strong>${vis.length}</strong></div>
+          <div class="svy-dash__summary-card"><span class="svy-dash__summary-label">Colaboradores asignados</span><strong>${asignadas}</strong></div>
+          <div class="svy-dash__summary-card"><span class="svy-dash__summary-label">Respuestas recibidas</span><strong>${respondidas}</strong></div>
+        </div>
+      </div>`;
+  }
+
+  /* ---------------- Doctores: encuestas externas ---------------- */
+  function dashDoctores() {
+    const f = dashFiltros();
+    const t = state.dashDoc;
+    if (!t) return `<div class="svy-dash"><div class="svy-dash__state">Cargando tablero…</div></div>`;
+    const op = t.options || {};
+    const activos = (f.dPeriodo !== "all" ? 1 : 0) + (f.dEncuesta !== "all" ? 1 : 0) + (f.dArea !== "all" ? 1 : 0);
+    const filtros = dashFiltrosBarra(`
+      ${campoSelect("Período", "dPeriodo", f.dPeriodo, [["all", "Todos"], ...(op.periods || []).slice().reverse().map((p) => [p.period, p.periodLabel])])}
+      ${campoSelect("Encuesta", "dEncuesta", f.dEncuesta, [["all", "Todas"], ...(op.surveys || []).map((s) => [s.id, s.name])])}
+      ${campoSelect("Área", "dArea", f.dArea, [["all", "Todas"], ...(op.areas || []).map((a) => [a, a])])}`, activos);
+
+    if (!t.sent && !t.answered) {
+      return `<div class="svy-dash">${filtros}<div class="svy-dash__state">Todavía no hay encuestas a doctores enviadas con estos filtros. Puede cargar datos de prueba desde el menú de Encuestas.</div></div>`;
+    }
+
+    const periodoTxt = f.dPeriodo !== "all" ? ((op.periods || []).find((p) => p.period === f.dPeriodo) || {}).periodLabel || f.dPeriodo : "Todos los períodos";
+    const kpi = (etiqueta, valor, sub = "", clase = "") => `
+      <div class="svy-dash__summary-card ${clase}"><span class="svy-dash__summary-label">${etiqueta}</span><strong>${valor}</strong>${sub ? `<small>${sub}</small>` : ""}</div>`;
+
+    /* Tendencia: promedio (barra), % respuesta y % con atención (líneas) */
+    const per = t.periods || [];
+    const ancho = 100 / Math.max(per.length, 1);
+    const punto = (i, v) => `${(i + 0.5) * ancho},${100 - v}`;
+    const tendencia = `
+      <div class="dsh-trend">
+        <div class="dsh-trend-plot">
+          ${per.map((p) => `
+            <button type="button" class="dsh-trend-col ${f.dPeriodo === p.period ? "is-sel" : ""}" data-act="dash-periodo" data-arg="${attr(p.period)}"
+              title="${attr(`${p.periodLabel}: promedio ${fmtProm(p.average)} · ${p.answered} de ${p.sent} respondieron (${p.rate}%) · ${p.attention} con atención (${p.attentionRate}%)`)}">
+              <span class="dsh-trend-val">${fmtProm(p.average, 1)}</span>
+              <i class="svy-dash__bar-fill-${claseNota(p.average)}" style="height:${p.average ? (p.average / 5) * 100 : 0}%"></i>
+            </button>`).join("")}
+          <svg class="dsh-trend-lines" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+            <polyline class="is-tasa" points="${per.map((p, i) => punto(i, p.rate)).join(" ")}"/>
+            <polyline class="is-atencion" points="${per.map((p, i) => punto(i, p.attentionRate)).join(" ")}"/>
+          </svg>
+        </div>
+        <div class="dsh-trend-labels">${per.map((p) => `<span>${esc(p.periodLabel.replace(/ \d{4}$/, ""))}<small>${p.rate}% resp.</small></span>`).join("")}</div>
+        <div class="dsh-leyenda"><span><i class="is-prom"></i>Promedio (barra)</span><span><i class="is-tasa"></i>% de respuesta</span><span><i class="is-atencion"></i>% con atención</span><span class="dsh-nota">Clic en un mes para filtrarlo</span></div>
+      </div>`;
+
+    /* Embudo: dónde se pierde la respuesta */
+    const fu = t.funnel || {};
+    const pasos = [["Generadas", fu.generated], ["Enviadas", fu.sent], ["Entregadas por WhatsApp", fu.delivered], ["Abrieron el enlace", fu.opened], ["Respondieron", fu.answered]];
+    const embudo = `<div class="svy-dash__bars">${pasos.map(([n, v], i) => barra({
+      titulo: n,
+      sub: i ? `${pasos[i - 1][1] ? Math.round((v / pasos[i - 1][1]) * 100) : 0}% del paso anterior` : "",
+      valor: v,
+      ancho: fu.generated ? (v / fu.generated) * 100 : 0,
+      clase: i === pasos.length - 1 ? "excellent" : "primary",
+    })).join("")}</div>
+      <div class="dsh-chips">
+        <button type="button" class="dsh-chip is-rojo" data-act="dash-ir-envios" title="Ver en Envíos">${t.waErrors} con error de WhatsApp</button>
+        <span class="dsh-chip">${t.expired} vencidas sin respuesta</span>
+      </div>`;
+
+    /* Calificaciones de 1 a 5 */
+    const est = t.stars || [];
+    const totalEst = est.reduce((a, e) => a + e.count, 0);
+    const maxEst = Math.max(...est.map((e) => e.count), 1);
+    const bajas = est.filter((e) => e.stars <= 3).reduce((a, e) => a + e.count, 0);
+    const estrellas = `
+      <div class="dsh-hist">
+        ${est.map((e) => `
+          <div class="dsh-hist-col" title="${attr(`${e.count} calificaciones de ${e.stars} estrella(s)`)}">
+            <span>${e.count}<small>${totalEst ? Math.round((e.count / totalEst) * 100) : 0}%</small></span>
+            <i class="${e.stars <= 3 ? "is-baja" : ""}" style="height:${(e.count / maxEst) * 100}%"></i>
+            <b>${"★".repeat(e.stars)}</b>
+          </div>`).join("")}
+      </div>
+      <div class="dsh-pie-nota"><b>${totalEst ? Math.round((bajas / totalEst) * 100) : 0}%</b> de las calificaciones son de 1 a 3 estrellas (${bajas} de ${totalEst}).</div>`;
+
+    /* Tipo de evaluación (cómo prefieren evaluar los doctores) */
+    const tipos = t.types || [];
+    const totalTipos = tipos.reduce((a, x) => a + x.count, 0) || 1;
+    const colTipo = { GENERAL: "#64748b", INDIVIDUAL: "#16a34a", MIXTA: "#7c3aed" };
+    const tipoTxt = { GENERAL: "General", INDIVIDUAL: "Individual", MIXTA: "Mixta" };
+    const tiposHtml = `
+      <div class="dsh-stack">${tipos.map((x) => `<i style="width:${(x.count / totalTipos) * 100}%;background:${colTipo[x.type]}" title="${attr(`${tipoTxt[x.type]}: ${x.count}`)}"></i>`).join("")}</div>
+      <div class="dsh-stack-ley">${tipos.map((x) => `<span><i style="background:${colTipo[x.type]}"></i>${tipoTxt[x.type]} <b>${x.count}</b> (${Math.round((x.count / totalTipos) * 100)}%)</span>`).join("")}</div>
+      <div class="dsh-pie-nota">Con Individual y Mixta se sabe qué orden falló; con General solo se conoce la opinión del mes.</div>`;
+
+    const areas = (t.areas || []).map((a) => barra({ titulo: a.area, sub: `${a.ratings} calificaciones · ${a.lowRate}% bajas`, valor: fmtProm(a.average), ancho: (a.average / 5) * 100, clase: claseNota(a.average), act: "dash-area", arg: a.area, tip: "Clic para filtrar por esta área" })).join("");
+    const maxMot = Math.max(...(t.reasons || []).map((r) => r.count), 1);
+    const motivos = (t.reasons || []).length
+      ? (t.reasons || []).map((r, i) => barra({ rango: `#${i + 1}`, titulo: r.reason, sub: `${r.share}% de los motivos`, valor: r.count, ancho: (r.count / maxMot) * 100, clase: "critical" })).join("")
+      : `<div class="svy-dash__empty">Sin calificaciones bajas con motivo.</div>`;
+    const asesoras = (t.advisors || []).length
+      ? (t.advisors || []).map((a, i) => barra({ rango: `#${i + 1}`, titulo: a.advisor, sub: `${etiquetaNota(a.average)} · ${a.ratings} calif. · ${a.low} bajas`, valor: fmtProm(a.average), ancho: (a.average / 5) * 100, clase: claseNota(a.average) })).join("")
+      : `<div class="svy-dash__empty">Sin órdenes evaluadas individualmente.</div>`;
+    const preguntas = (t.questions || []).map((q) => barra({ titulo: q.question, sub: `${esc(q.area)} · ${q.lowRate}% bajas`, valor: fmtProm(q.average), ancho: (q.average / 5) * 100, clase: claseNota(q.average) })).join("");
+
+    const flecha = (v) => (v === null || v === undefined ? `<span class="dsh-tend">—</span>`
+      : `<span class="dsh-tend ${v < 0 ? "is-baja" : v > 0 ? "is-sube" : ""}">${v < 0 ? "▼" : v > 0 ? "▲" : "="} ${Math.abs(v).toFixed(1)}</span>`);
+    const riesgo = (t.riskDoctors || []).length ? `
+      <table class="dsh-tabla">
+        <thead><tr><th>Doctor</th><th>Promedio</th><th>Último vs. anterior</th><th>Notas bajas</th><th>Respuestas</th><th></th></tr></thead>
+        <tbody>${t.riskDoctors.map((d) => `
+          <tr>
+            <td><b>${esc(d.doctor)}</b><small>${esc(d.doctorId)} · ${esc(d.clinic)}</small></td>
+            <td><span class="dsh-nota-pill is-${claseNota(d.average)}">${fmtProm(d.average)}</span></td>
+            <td>${flecha(d.trend)}</td>
+            <td>${d.lowCount}</td>
+            <td>${d.responses}</td>
+            <td class="dsh-acc">
+              <button type="button" class="mini-btn" data-act="seg-detalle" data-arg="${attr(d.instanceId)}">Última respuesta</button>
+              <button type="button" class="mini-btn" data-act="seg-historico" data-arg="${attr(d.doctorKey)}">Histórico</button>
+            </td>
+          </tr>`).join("")}</tbody>
+      </table>` : `<div class="svy-dash__empty">Sin respuestas en este período.</div>`;
+
+    return `
+      <div class="svy-dash">
+        ${filtros}
+        <div class="dsh-kpis">
+          ${kpi("Encuestas enviadas", t.sent, `${t.doctors} doctores · ${esc(periodoTxt)}`)}
+          ${kpi("Respondidas", t.answered, `${t.rate}% de respuesta`)}
+          ${kpi("Promedio", `${fmtProm(t.average)} <em>/ 5</em>`, etiquetaNota(t.average), `is-${claseNota(t.average)}`)}
+          ${kpi("Requieren atención", t.attention, `${t.attentionRate}% de las respuestas`, t.attention ? "is-alerta" : "")}
+          ${kpi("WhatsApp con error", t.waErrors, "No recibieron la encuesta", t.waErrors ? "is-alerta" : "")}
+        </div>
+        <div class="svy-dash__grid">
+          ${tarjeta("trending", "Tendencia por período", tendencia, "is-ancha", "¿Mejora o empeora la satisfacción mes a mes, y responde más gente?")}
+          ${tarjeta("check", "Embudo de respuesta", embudo, "", "Dónde se pierde la respuesta del doctor.")}
+          ${tarjeta("star", "Calificaciones de 1 a 5", estrellas, "", "Cuántas notas bajas hay realmente.")}
+          ${tarjeta("briefcase", "Promedio por área", `<div class="svy-dash__bars">${areas}</div>`, "", "Qué área responde por las notas bajas.")}
+          ${tarjeta("message", "Motivos de mejora", `<div class="svy-dash__bars">${motivos}</div>`, "", "Lo que marcan los doctores cuando califican bajo.")}
+          ${tarjeta("users", "Ranking de asesoras", `<div class="svy-dash__bars">${asesoras}</div>`, "", "Solo cuenta lo evaluado por orden (Individual o Mixta).")}
+          ${tarjeta("shield", "Preguntas con promedio más bajo", `<div class="svy-dash__bars">${preguntas}</div>`)}
+          ${tarjeta("users", "Doctores a atender", riesgo, "is-ancha", "Los de promedio más bajo. Abra su última respuesta o su histórico para darles seguimiento.")}
+          ${tarjeta("clipboard", "Tipo de evaluación", tiposHtml, "is-ancha")}
+        </div>
+      </div>`;
+  }
+
+  async function accionDashboard(act, arg) {
+    const f = dashFiltros();
+    switch (act) {
+      case "dash-modulo":
+        f.modulo = arg;
+        break;
+      case "dash-tab":
+        f.tab = arg;
+        break;
+      case "dash-filtros":
+        f.abiertos = !f.abiertos;
+        guardarDash();
+        renderView();
+        return true;
+      case "dash-limpiar":
+        Object.assign(f, f.tab === "internas" ? { buscar: "", anio: "all", mes: "all", area: "all" } : { dPeriodo: "all", dEncuesta: "all", dArea: "all" });
+        break;
+      case "dash-periodo":
+        f.dPeriodo = f.dPeriodo === arg ? "all" : arg;
+        break;
+      case "dash-area":
+        f.dArea = f.dArea === arg ? "all" : arg;
+        break;
+      case "dash-abrir":
+        f.modulo = "encuestas";
+        f.tab = "doctores";
+        guardarDash();
+        await irA("dashboard");
+        return true;
+      case "dash-ir-envios": {
+        const enc = f.dEncuesta !== "all" ? f.dEncuesta : ((state.dashDoc.options.surveys || [])[0] || {}).id;
+        if (!enc) return true;
+        await runAction("edit", enc);
+        state.module = "surveys";
+        state.segFiltro = Object.assign({}, SEG_FILTRO, { whatsapp: "ERROR", periodo: f.dPeriodo !== "all" ? f.dPeriodo : "all" });
+        await runAction("editor-tab", "envios");
+        renderApp();
+        return true;
+      }
+      default:
+        return false;
+    }
+    guardarDash();
+    await cargarDashboard();
+    renderApp();
+    return true;
+  }
+
+  function cambioDashboard(target, escribiendo) {
+    if (!target.matches("[data-dash-filtro]")) return false;
+    if (escribiendo && target.tagName === "SELECT") return true;
+    dashFiltros()[target.dataset.dashFiltro] = target.value;
+    guardarDash();
+    if (target.tagName === "INPUT") {
+      refrescarListado(target.id);
+      return true;
+    }
+    cargarDashboard().then(renderView);
+    return true;
+  }
+
+  /* Acciones de resultados; devuelve true si la atendió */
+  async function accionResultados(act, arg) {
+    const f = filtrosRes();
+    switch (act) {
+      case "doc-orden": {
+        const o = state.resDocOrden || { col: "enviada", dir: "desc" };
+        state.resDocOrden = { col: arg, dir: o.col === arg && o.dir === "desc" ? "asc" : "desc" };
+        state.resDocPagina = 1;
+        renderView();
+        return true;
+      }
+      case "res-tab":
+        f.tab = arg === "doctores" ? "doctores" : "internas";
+        guardarFiltrosRes();
+        state.resDoc = null;
+        state.resDocDetalle = null;
+        irA("results-list");
+        return true;
+      case "res-filtros":
+        f.abiertos = !f.abiertos;
+        guardarFiltrosRes();
+        renderView();
+        return true;
+      case "res-limpiar":
+        Object.assign(f, { buscar: "", anio: "all", mes: "all", area: "all" });
+        guardarFiltrosRes();
+        renderView();
+        return true;
+      case "res-det-tab":
+        f.detalle = arg === "analytics" ? "analytics" : "detail";
+        guardarFiltrosRes();
+        state.resColab = null;
+        renderView();
+        return true;
+      case "res-colab":
+        state.resColab = Number(arg);
+        renderView();
+        return true;
+      case "res-colab-cerrar":
+        state.resColab = null;
+        renderView();
+        return true;
+      case "res-exportar":
+        exportarInterna();
+        return true;
+      case "res-noop":
+        return true;
+      case "doc-abrir": {
+        state.resDoc = (state.resDoctores || []).find((p) => p.doctorSurveyPeriodId === arg) || { doctorSurveyPeriodId: arg };
+        state.resDocDetalle = null;
+        state.resDocTab = "summary";
+        state.resDocPregunta = "";
+        state.resDocPersona = "";
+        state.resDocComentarios = {};
+        state.resDocMas = {};
+        state.view = "doctor-result";
+        state.module = "surveys";
+        renderApp();
+        try {
+          state.resDocDetalle = await DL.api.resultadoDoctores(arg);
+        } catch (error) {
+          showToast(error.message);
+        }
+        if (state.view === "doctor-result") renderView();
+        return true;
+      }
+      case "doc-volver":
+        state.resDoc = null;
+        state.resDocDetalle = null;
+        irA("results-list");
+        return true;
+      case "doc-tab":
+        state.resDocTab = arg;
+        renderView();
+        window.scrollTo(0, 0);
+        return true;
+      case "doc-ver-pregunta":
+        state.resDocPregunta = arg;
+        state.resDocTab = "question";
+        renderView();
+        window.scrollTo(0, 0);
+        return true;
+      case "doc-ver-persona":
+        state.resDocPersona = arg;
+        state.resDocTab = "person";
+        renderView();
+        window.scrollTo(0, 0);
+        return true;
+      case "doc-mover-pregunta":
+      case "doc-mover-persona": {
+        const d = state.resDocDetalle;
+        if (!d) return true;
+        const pregunta = act === "doc-mover-pregunta";
+        const lista = pregunta ? modeloDoctores(d).flatMap((s) => s.questions) : respondieron(d);
+        const actual = pregunta ? state.resDocPregunta : state.resDocPersona;
+        const i = Math.max(0, lista.findIndex((x) => String(x.key) === String(actual)));
+        const otro = lista[i + Number(arg)];
+        if (otro) {
+          if (pregunta) state.resDocPregunta = otro.key;
+          else state.resDocPersona = otro.key;
+          renderView();
+        }
+        return true;
+      }
+      case "doc-comentarios":
+        state.resDocComentarios = Object.assign({}, state.resDocComentarios, { [arg]: !(state.resDocComentarios || {})[arg] });
+        renderView();
+        return true;
+      case "doc-mas":
+        state.resDocMas = Object.assign({}, state.resDocMas, { [arg]: !(state.resDocMas || {})[arg] });
+        renderView();
+        return true;
+      case "doc-exportar":
+        exportarDoctores();
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  /* Filtros y selectores de resultados (input y change) */
+  function cambioResultados(target, escribiendo) {
+    if (target.matches("[data-res-filtro]")) {
+      filtrosRes()[target.dataset.resFiltro] = target.value;
+      guardarFiltrosRes();
+      if (escribiendo) refrescarListado("buscarResultado");
+      else renderView();
+      return true;
+    }
+    if (target.matches("[data-doc-buscar]")) {
+      state.resDocBuscar = target.value;
+      state.resDocPagina = 1;
+      refrescarListado("docBuscar");
+      return true;
+    }
+    if (target.matches("[data-doc-select]")) {
+      if (escribiendo) return true;
+      const cual = target.dataset.docSelect;
+      if (cual === "encuesta") {
+        state.resDocFiltro = target.value;
+        state.resDocPagina = 1;
+      }
+      if (cual === "pregunta") state.resDocPregunta = target.value;
+      if (cual === "persona") state.resDocPersona = target.value;
+      renderView();
+      return true;
+    }
+    return false;
   }
 
   /* ---------------- Ficha del trabajo (los mismos datos del sistema) ---------------- */
