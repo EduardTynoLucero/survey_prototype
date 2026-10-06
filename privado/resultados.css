@@ -2468,3 +2468,8 @@
   .dsv-rs-col-value small { display: none; }
   .dsv-rs-formtop-meta { margin-left: -14px; margin-right: -14px; padding-left: 14px; padding-right: 14px; }
 }
+
+/* Lista de resultados externos con la misma densidad que la tabla de internas */
+.dsv-rs-mini.is-list { font-size: 10px; }
+.dsv-rs-mini.is-list th { height: 21px; padding: 0 8px; font-size: 9px; line-height: 1; letter-spacing: 0.02em; }
+.dsv-rs-mini.is-list td { height: 26px; padding: 2px 8px; font-size: 10px; font-weight: 500; line-height: 1.2; }
