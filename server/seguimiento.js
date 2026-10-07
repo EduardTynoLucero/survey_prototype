@@ -339,7 +339,7 @@ function historico(doctorKey) {
 /* ---------- Tablero (Dashboard → Encuestas → Doctores) ----------
    Filtros: periodo (YYYY-MM), encuesta (id) y área. La tendencia por
    período ignora el filtro de período para poder comparar meses. */
-function tablero(filtros = {}) {
+function contexto(filtros = {}) {
   const trabajos = trabajosPorId();
   const externas = db.encuestas.listar().filter((e) => e.classification === "Externa");
   const encuestas = new Map(externas.map((e) => [e.id, e]));
@@ -367,6 +367,18 @@ function tablero(filtros = {}) {
   };
   const enviada = (i) => Boolean(i.sentAt) || i.state !== "Generada";
 
+  /* Lo demás: solo el período elegido */
+  const lista = periodo ? todas.filter((i) => i.period === periodo) : todas;
+  const contestadas = lista.filter(respondida);
+  const resumenesLista = contestadas.map(resumenDe);
+  const respuestas = resumenesLista.flatMap((r) => r.answers);
+  const calificadas = respuestas.filter((a) => a.score);
+  return { trabajos, externas, encuestas, area, periodo, todas, resumenDe, enviada, lista, contestadas, resumenesLista, respuestas, calificadas };
+}
+
+function tablero(filtros = {}) {
+  const { trabajos, externas, encuestas, area, periodo, todas, resumenDe, enviada, lista, contestadas, resumenesLista, respuestas, calificadas } = contexto(filtros);
+
   /* Tendencia: todos los períodos */
   const porPeriodo = new Map();
   todas.forEach((instancia) => {
@@ -393,12 +405,7 @@ function tablero(filtros = {}) {
       attentionRate: f.answered ? Math.round((f.atencion / f.answered) * 100) : 0,
     }));
 
-  /* Lo demás: solo el período elegido */
-  const lista = periodo ? todas.filter((i) => i.period === periodo) : todas;
-  const contestadas = lista.filter(respondida);
-  const resumenesLista = contestadas.map(resumenDe);
-  const respuestas = resumenesLista.flatMap((r) => r.answers);
-  const calificadas = respuestas.filter((a) => a.score);
+
 
   /* Embudo: de lo generado a lo respondido */
   const embudo = {
@@ -520,4 +527,115 @@ function tablero(filtros = {}) {
   };
 }
 
-module.exports = { envios, respuestas, respuesta, historico, tablero, idDoctor, limpiarDoctor };
+/* ---------- Detalle de un gráfico del tablero ----------
+   Devuelve los registros exactos detrás de una barra, columna, fila o
+   KPI del tablero de doctores, con los mismos filtros, para poder
+   comprobar el número del gráfico. "grafico" dice qué se pidió y
+   "clave" qué elemento (un área, un mes, una pregunta, etc.). */
+function detalleTablero(filtros = {}, grafico = "", clave = "") {
+  const ctx = contexto(filtros);
+  const { encuestas, todas, resumenDe, enviada, lista, contestadas, resumenesLista, respuestas, calificadas } = ctx;
+
+  /* Cierre por encuesta y período, para el estado de cada envío */
+  const cierres = new Map();
+  const cierre = (i) => {
+    const k = `${i.surveyId}|${i.period}`;
+    if (!cierres.has(k)) cierres.set(k, cierreDe(encuestas.get(i.surveyId), db.instancias.listar(i.surveyId).filter((x) => x.period === i.period)));
+    return cierres.get(k);
+  };
+
+  const fichaEnvio = (i) => {
+    const r = respondida(i) ? resumenDe(i) : null;
+    return {
+      instanceId: i.id,
+      surveyName: (encuestas.get(i.surveyId) || {}).name || "",
+      doctor: i.doctor,
+      doctorId: idDoctor(i.doctor),
+      clinic: i.clinic || "",
+      periodLabel: i.periodLabel || i.period,
+      sentAt: aISO(i.sentAt),
+      openedAt: aISO(i.openedAt),
+      answeredAt: aISO(i.finishedAt),
+      whatsapp: i.waStatus === "error" ? "Error" : enviada(i) ? "Enviado" : "—",
+      status: estadoEncuesta(i, cierre(i)).texto,
+      answered: Boolean(r),
+      type: r ? r.type : "",
+      average: r ? r.average : null,
+      attention: r ? r.attention : 0,
+    };
+  };
+  const fichaResumen = (r) => fichaEnvio(db.instancias.obtener(r.instanceId));
+
+  /* Cada calificación sabe de qué respuesta salió */
+  const origen = new Map();
+  resumenesLista.forEach((r) => r.answers.forEach((a) => origen.set(a.answerId, r)));
+  const fichaNota = (a) => {
+    const r = origen.get(a.answerId) || {};
+    return {
+      instanceId: r.instanceId,
+      doctor: r.doctor,
+      doctorId: r.doctorId,
+      periodLabel: r.periodLabel,
+      surveyName: r.surveyName,
+      question: a.question,
+      area: a.area || "Sin área",
+      level: a.level,
+      orders: a.orders.map((o) => o.code),
+      advisors: a.advisors,
+      score: a.score,
+      reasons: a.reasons,
+      comment: a.comment || a.textAnswer,
+    };
+  };
+
+  let tipo = "envios";
+  let filas = [];
+  const ok = (x) => x;
+  switch (grafico) {
+    case "enviadas": filas = lista.filter(enviada).map(fichaEnvio); break;
+    case "respondidas": filas = contestadas.map(fichaEnvio); break;
+    case "promedio": filas = resumenesLista.filter((r) => r.average !== null).map(fichaResumen); break;
+    case "atencion": filas = resumenesLista.filter((r) => r.attention > 0).map(fichaResumen); break;
+    case "wa-error": filas = lista.filter((i) => i.waStatus === "error").map(fichaEnvio); break;
+    case "vencidas": filas = lista.filter((i) => !respondida(i) && String(i.state).startsWith("Cerrada")).map(fichaEnvio); break;
+    case "periodo": filas = todas.filter((i) => (i.period || "-") === clave && enviada(i)).map(fichaEnvio); break;
+    case "embudo": {
+      const pasos = {
+        generated: () => true,
+        sent: enviada,
+        delivered: (i) => enviada(i) && i.waStatus !== "error",
+        opened: (i) => i.openedAt || respondida(i) || PENDIENTES.includes(i.state),
+        answered: respondida,
+      };
+      filas = lista.filter(pasos[clave] || ok).map(fichaEnvio);
+      break;
+    }
+    case "tipo": filas = resumenesLista.filter((r) => r.type === clave).map(fichaResumen); break;
+    case "doctor": filas = resumenesLista.filter((r) => r.doctorKey === clave && r.average !== null).map(fichaResumen); break;
+    default: {
+      tipo = "notas";
+      const elegir = {
+        estrellas: () => calificadas.filter((a) => a.score === Number(clave)),
+        bajas: () => calificadas.filter((a) => a.score <= 3),
+        area: () => calificadas.filter((a) => (a.area || "Sin área") === clave),
+        pregunta: () => calificadas.filter((a) => a.question === clave),
+        asesora: () => calificadas.filter((a) => a.level !== "general" && (a.advisors || []).includes(clave)),
+        motivo: () => respuestas.filter((a) => a.belowThreshold && (a.reasons || []).includes(clave)),
+      }[grafico];
+      filas = elegir ? elegir().map(fichaNota) : [];
+    }
+  }
+
+  const notas = tipo === "notas" ? filas.map((f) => f.score).filter(Boolean) : filas.map((f) => f.average).filter((v) => v !== null && v !== undefined);
+  return {
+    kind: tipo,
+    total: filas.length,
+    answered: tipo === "envios" ? filas.filter((f) => f.answered).length : filas.length,
+    average: redondo(promedio(notas)),
+    low: tipo === "notas" ? filas.filter((f) => f.score && f.score <= 3).length : filas.reduce((t, f) => t + (f.attention ? 1 : 0), 0),
+    doctors: new Set(filas.map((f) => limpiarDoctor(f.doctor || ""))).size,
+    rows: filas,
+  };
+}
+
+module.exports = { envios, respuestas, respuesta, historico, tablero, detalleTablero, idDoctor, limpiarDoctor };

@@ -120,7 +120,7 @@ async function api(req, res, ruta, consulta) {
   /* ---- personal del laboratorio ---- */
   if (partes[1] === "empleados" && !partes[2] && req.method === "GET") {
     const gente = personal.listar().map((persona) => {
-      const suyas = db.instancias.listar().filter((i) => i.employeeId === persona.id);
+      const suyas = db.instancias.listar().filter((i) => i.employeeId === persona.id && i.period !== "libre");
       return Object.assign({}, persona, {
         _asignadas: suyas.length,
         _respondidas: suyas.filter((i) => i.answers && i.answers.length).length,
@@ -136,7 +136,7 @@ async function api(req, res, ruta, consulta) {
     /* Sus encuestas internas, para el apartado de encuestas de la ficha */
     const suyas = db.instancias
       .listar()
-      .filter((i) => i.employeeId === persona.id)
+      .filter((i) => i.employeeId === persona.id && i.period !== "libre")
       .map((instancia) => {
         const encuesta = db.encuestas.obtener(instancia.surveyId);
         const notas = (instancia.answers || []).filter((r) => r.calificacion).map((r) => r.calificacion);
@@ -201,6 +201,10 @@ async function api(req, res, ruta, consulta) {
     const datos = seguimiento.historico((consulta || {}).doctor || "");
     return datos ? json(res, datos) : json(res, { error: "doctor sin encuestas" }, 404);
   }
+  if (partes[1] === "tablero-doctores" && partes[2] === "detalle" && req.method === "GET") {
+    const c = consulta || {};
+    return json(res, seguimiento.detalleTablero(c, c.grafico || "", c.clave || ""));
+  }
   if (partes[1] === "tablero-doctores" && req.method === "GET") {
     return json(res, seguimiento.tablero(consulta || {}));
   }
@@ -235,7 +239,7 @@ async function api(req, res, ruta, consulta) {
 
     const bandeja = db.instancias
       .listar()
-      .filter((i) => i.employeeId === persona.id)
+      .filter((i) => i.employeeId === persona.id && i.period !== "libre")
       .map((instancia) => {
         const encuesta = db.encuestas.obtener(instancia.surveyId);
         return {
@@ -254,12 +258,71 @@ async function api(req, res, ruta, consulta) {
       })
       .sort((a, b) => Number(a.respondida) - Number(b.respondida));
 
+    /* Encuestas libres que su jefe le hizo a su equipo */
+    const jefe = personal.jefeDe(persona.id);
+    const formularios = jefe
+      ? db.encuestas.listar()
+          .filter((e) => catalogo.esLibre(e) && e.ownerId === jefe.id && e.status !== "Borrador")
+          .map((e) => {
+            const suya = db.instancias.listar(e.id).find((i) => i.employeeId === persona.id);
+            const respondida = Boolean(suya);
+            const abierta = resultadosDoctores.disponible(e);
+            const prog = e.schedule || {};
+            return {
+              surveyId: e.id,
+              surveyName: e.name,
+              description: e.description || "",
+              owner: jefe.name,
+              anonymous: e.anonymous !== false,
+              availableTo: prog.endDate ? `${prog.endDate} ${String(prog.endTime || "23:59").slice(0, 5)}` : "",
+              open: abierta.ok,
+              reason: abierta.motivo,
+              respondida,
+              finishedAt: suya ? suya.finishedAt : "",
+              preguntas: (e.sections || []).reduce((t, sec) => t + (sec.questions || []).length, 0),
+            };
+          })
+          .filter((f) => f.open || f.respondida)
+      : [];
+
     /* Si es supervisor, también ve el resultado de su equipo */
     const mios = persona.supervisor
       ? operaciones.resultados().filter((r) => r.supervisor === persona.name)
       : [];
 
-    return json(res, { empleado: persona, bandeja, resultados: mios });
+    return json(res, { empleado: persona, bandeja, resultados: mios, formularios });
+  }
+
+  /* Encuestas libres de un jefe para su equipo */
+  if (partes[1] === "portal" && partes[2] && partes[3] === "equipo" && req.method === "GET") {
+    const jefe = personal.obtener(decodeURIComponent(partes[2]));
+    if (!jefe) return json(res, { error: "colaborador no encontrado" }, 404);
+    const equipo = personal.equipoDe(jefe.id);
+    const formularios = db.encuestas
+      .listar()
+      .filter((e) => catalogo.esLibre(e) && e.ownerId === jefe.id)
+      .map((e) => {
+        const lista = db.instancias.listar(e.id);
+        const prog = e.schedule || {};
+        return {
+          id: e.id,
+          name: e.name,
+          description: e.description || "",
+          status: e.status,
+          anonymous: e.anonymous !== false,
+          createdAt: e.createdAt || "",
+          startsAt: prog.startDate ? `${prog.startDate} ${String(prog.startTime || "00:00").slice(0, 5)}` : "",
+          availableTo: prog.endDate ? `${prog.endDate} ${String(prog.endTime || "23:59").slice(0, 5)}` : "",
+          open: resultadosDoctores.disponible(e).ok,
+          preguntas: (e.sections || []).reduce((t, sec) => t + (sec.questions || []).length, 0),
+          respondidas: lista.filter((i) => equipo.some((m) => m.id === i.employeeId)).length,
+          equipo: equipo.length,
+        };
+      });
+    return json(res, {
+      equipo: equipo.map((m) => ({ id: m.id, name: m.name, position: m.position, area: m.area, email: m.email })),
+      formularios,
+    });
   }
 
   if (partes[1] === "trabajos" && partes[2] && partes[3] === "encuesta" && req.method === "GET") {
@@ -460,6 +523,10 @@ async function api(req, res, ruta, consulta) {
       return json(res, resultadosDoctores.detalleLibre(encuesta));
     }
     if (partes[3] === "disponible" && req.method === "GET") {
+      if (encuesta.ownerId) {
+        const jefe = personal.obtener(encuesta.ownerId);
+        return json(res, { ok: false, motivo: `Esta encuesta es solo para el equipo de ${jefe ? jefe.name : "su jefe"}. Respóndala desde "Mis encuestas" en el sistema.` });
+      }
       return json(res, resultadosDoctores.disponible(encuesta));
     }
     if (partes[3] === "libre" && req.method === "POST") {
@@ -469,16 +536,29 @@ async function api(req, res, ruta, consulta) {
       const respuestas = Array.isArray(cuerpo.respuestas) ? cuerpo.respuestas : [];
       if (!respuestas.length) return json(res, { error: "sin respuestas" }, 400);
       const cuantas = db.instancias.listar(encuesta.id).length;
-      const nombre = String(cuerpo.nombre || "").trim().slice(0, 120);
+      let nombre = String(cuerpo.nombre || "").trim().slice(0, 120);
+      let empleado = "";
+      /* Encuesta de equipo: solo la responde el equipo del jefe, una vez cada uno */
+      if (encuesta.ownerId) {
+        const persona = personal.obtener(String(cuerpo.employeeId || ""));
+        if (!persona || !personal.equipoDe(encuesta.ownerId).some((m) => m.id === persona.id)) {
+          return json(res, { error: "Esta encuesta es solo para el equipo de quien la creó." }, 403);
+        }
+        if (db.instancias.listar(encuesta.id).some((i) => i.employeeId === persona.id)) {
+          return json(res, { error: "Usted ya respondió esta encuesta." }, 409);
+        }
+        empleado = persona.id;
+        nombre = encuesta.anonymous === false ? persona.name : "";
+      }
       const cuando = new Date().toLocaleString("es-GT", { hour12: false });
       const instancia = {
         id: catalogo.uid("lib"),
         surveyId: encuesta.id,
         period: "libre",
-        periodLabel: "Formulario libre",
+        periodLabel: encuesta.ownerId ? "Encuesta de equipo" : "Formulario libre",
         doctor: nombre || `Respuesta ${cuantas + 1}`,
         clinic: "",
-        employeeId: "",
+        employeeId: empleado,
         workIds: [],
         state: "Completada",
         generatedAt: cuando,

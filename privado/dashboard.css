@@ -745,3 +745,28 @@ button.dsh-chip { cursor: pointer; }
 @media (max-width: 1100px) {
   .dsh-kpis { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* Cada dato del tablero abre las respuestas que lo forman */
+.svy-dash .is-click { cursor: pointer; }
+.svy-dash__summary-card.is-click:hover { border-color: var(--sd2-primary, #d84b91); box-shadow: 0 0 0 1px var(--sd2-primary, #d84b91) inset; }
+.dsh-hist-col.is-click:hover i { filter: brightness(1.12); outline: 2px solid #fcd2e5; }
+.dsh-hist-col.is-click:hover b { text-decoration: underline; }
+.svy-dash__response-item.is-click:hover strong, .dsh-pie-nota.is-click:hover u, .dsh-stack-ley .is-click:hover { color: var(--sd2-primary-dark, #b0336f); text-decoration: underline; }
+.dsh-stack i.is-click:hover { filter: brightness(1.15); }
+.dsh-tabla tr.is-click:hover td { background: #fcecf4; }
+button.dsh-chip:hover { text-decoration: underline; }
+
+/* Detalle de un dato del tablero */
+.dsh-det-head { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 10px; }
+.dsh-det-titulo span { color: #6b7280; font-size: 10.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+.dsh-det-titulo h2 { margin: 2px 0 2px; font-size: 17px; font-weight: 700; color: #1f2937; }
+.dsh-det-titulo p { margin: 0; color: #6b7280; font-size: 11.5px; }
+.dsh-det-check { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin-bottom: 10px; padding: 7px 12px; border: 1px solid; border-radius: 2px; font-size: 11.5px; }
+.dsh-det-check.is-ok { border-color: #bbf7d0; background: #f0fdf4; color: #166534; }
+.dsh-det-check.is-mal { border-color: #fecaca; background: #fff1f2; color: #b91c1c; }
+.dsh-det-check em { margin-left: auto; font-style: normal; font-weight: 700; }
+.dsh-det-sub { display: block; color: #9ca3af; font-size: 9px; }
+.dsh-det-larga { max-width: 260px; white-space: normal; }
+.dsh-det-nota { white-space: nowrap; }
+.dsh-det-error { color: #dc2626; font-weight: 700; }
+@media (max-width: 700px) { .dsh-det-head { flex-direction: column; gap: 6px; } .dsh-det-check em { margin-left: 0; } }

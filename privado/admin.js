@@ -544,6 +544,14 @@
       }
     }
 
+    const paginaDash = event.target.closest("[data-dash-pagina]");
+    if (paginaDash && !paginaDash.disabled && state.dashDet) {
+      state.dashDet.pagina = Number(paginaDash.dataset.dashPagina) || 1;
+      renderView();
+      window.scrollTo(0, 0);
+      return;
+    }
+
     /* Paginador de trabajos */
     const paginaDoc = event.target.closest("[data-doc-pagina]");
     if (paginaDoc && !paginaDoc.disabled) {
@@ -606,7 +614,7 @@
     if (view !== "answers") state.answersSurveyId = "";
     state.segPila = [];
     state.view = view;
-    state.module = view === "dashboard"
+    state.module = view === "dashboard" || view === "dash-detail"
       ? "dashboard"
       : view.startsWith("work")
       ? "works"
@@ -642,6 +650,11 @@
       if (view === "inbox") await cargarBandeja();
       if (view === "dashboard") await cargarDashboard();
       if (view === "my-results") await cargarMisResultados();
+      if (view === "team-surveys") {
+        state.equipo = true;
+        await cargarEquipo();
+      }
+      if (view === "survey-list") state.equipo = false;
     } catch (error) {
       showToast(error.message);
     }
@@ -717,6 +730,7 @@
       if (await accionSeguimiento(act, arg)) return;
       switch (act) {
         case "create": {
+          state.equipo = false;
           const plantilla = await DL.api.plantilla(arg);
           abrirBorrador(plantilla, true);
           state.view = "survey-edit";
@@ -793,10 +807,11 @@
           /* El formulario libre se queda abierto: lo siguiente es compartir su enlace */
           if (esLibre(guardada)) {
             state.surveys = await DL.api.encuestas();
+            if (guardada.ownerId) await cargarEquipo();
             abrirBorrador(guardada);
             state.view = "survey-edit";
             renderApp();
-            showToast("Formulario creado. Copie el enlace para compartirlo.");
+            showToast(guardada.ownerId ? "Encuesta guardada. Su equipo ya la ve en \"Mis encuestas\"." : "Formulario creado. Copie el enlace para compartirlo.");
             return;
           }
 
@@ -823,13 +838,16 @@
           state.draft = null;
           state.original = null;
           state.esNueva = false;
-          await irA("survey-list");
+          await irA(volverLista());
           showToast(nueva ? "Encuesta descartada." : "Cambios descartados.");
           return;
         }
 
         case "edit": {
+          state.equipo = false;
           const encuesta = await DL.api.encuesta(arg);
+          /* Encuesta de un jefe a su equipo: se carga ese equipo */
+          if (encuesta.ownerId) state.equipoDatos = await DL.api.equipo(encuesta.ownerId).catch(() => null);
           const fila = state.surveys.find((item) => item.id === arg);
           if (fila) {
             encuesta._instancias = fila._instancias;
@@ -1026,6 +1044,61 @@
           return;
         }
 
+        /* ---------- Encuestas de un jefe a su equipo ---------- */
+        case "equipo-nueva": {
+          const plantilla = await DL.api.plantilla("Interna");
+          Object.assign(plantilla, {
+            assignMode: LIBRE,
+            ownerId: sesion.id,
+            ownerName: sesion.name,
+            anonymous: true,
+            subtype: "Encuesta de equipo",
+          });
+          state.equipo = true;
+          abrirBorrador(plantilla, true);
+          state.view = "survey-edit";
+          state.module = "surveys";
+          renderApp();
+          return;
+        }
+
+        case "equipo-abrir":
+        case "equipo-respuestas": {
+          const encuesta = await DL.api.encuesta(arg);
+          state.equipo = true;
+          abrirBorrador(encuesta);
+          state.view = "survey-edit";
+          state.module = "surveys";
+          if (act === "equipo-respuestas") {
+            await runAction("int-tab", "respuestas");
+            return;
+          }
+          renderApp();
+          return;
+        }
+
+        case "equipo-estado": {
+          const encuesta = await DL.api.encuesta(arg);
+          encuesta.status = encuesta.status === "Activa" ? "Inactiva" : "Activa";
+          await DL.api.guardarEncuesta(encuesta);
+          await cargarEquipo();
+          renderView();
+          showToast(encuesta.status === "Activa" ? "Encuesta activada: su equipo ya la ve." : "Encuesta desactivada: su equipo ya no la ve.");
+          return;
+        }
+
+        case "responder-equipo": {
+          const forma = (state.formsEquipo || []).find((f) => f.surveyId === arg);
+          if (!forma || forma.respondida) {
+            showToast("Esta encuesta ya fue respondida.");
+            return;
+          }
+          const encuesta = await DL.api.encuesta(arg);
+          state.respondiendo = { encuesta, instancia: { id: "", periodLabel: `Enviada por ${forma.owner}`, supervisor: "" }, libre: true, anonimo: forma.anonymous };
+          renderView();
+          return;
+        }
+
         case "editar-encuesta":
           state.editando = true;
           state.editorTab = "detalle";
@@ -1080,7 +1153,7 @@
         case "result-detail": {
           state.resultado = null;
           state.resColab = null;
-          state.volverA = state.view === "my-results" ? "my-results" : "results-list";
+          state.volverA = ["my-results", "dash-detail"].includes(state.view) ? state.view : "results-list";
           state.view = "result-detail";
           state.module = "surveys";
           renderApp();
@@ -1920,6 +1993,8 @@
       "resp-detail": renderRespuestaDetalle,
       "doctor-history": renderHistoricoDoctor,
       dashboard: renderDashboard,
+      "dash-detail": renderDashDetalle,
+      "team-surveys": renderEncuestasEquipo,
     };
     if (["survey-edit"].includes(state.view) && !state.draft) state.view = "survey-list";
     if (state.view === "sends" && !state.draft) {
@@ -1927,8 +2002,10 @@
       return;
     }
     /* Quien no administra el módulo solo entra a su bandeja y sus resultados */
-    const permitidas = esJefe() ? ["inbox", "my-results", "result-detail"] : ["inbox"];
+    const permitidas = esJefe() ? ["inbox", "my-results", "result-detail", "team-surveys", "survey-edit"] : ["inbox"];
     if (!esAdmin() && !permitidas.includes(state.view)) state.view = "inbox";
+    /* Un jefe solo abre en el editor sus encuestas de equipo */
+    if (!esAdmin() && state.view === "survey-edit" && !(state.draft && state.draft.ownerId === sesion.id)) state.view = "team-surveys";
 
     els.appView.innerHTML = (vistas[state.view] || (esAdmin() ? renderSurveyList : renderBandejaInterna))() + renderConfirmar();
     if (state.view === "inbox" && state.respondiendo) montarRespuesta();
@@ -2073,6 +2150,7 @@
       const datos = await DL.api.portalBandeja(sesion.id);
       state.bandeja = datos.bandeja || [];
       state.misResultados = datos.resultados || [];
+      state.formsEquipo = datos.formularios || [];
     } catch (error) {
       state.bandeja = [];
       state.misResultados = [];
@@ -2125,19 +2203,88 @@
      ================================================================== */
   const cargarBandeja = cargarPersonal;
 
+  /* ==================================================================
+     ENCUESTAS · Encuestas a mi equipo (jefes de área)
+     El jefe crea encuestas libres para su equipo directo: no se evalúa a
+     nadie, las responde cada persona de su equipo desde "Mis encuestas"
+     y solo él (y el administrador) ve las respuestas.
+     ================================================================== */
+  const volverLista = () => (state.equipo ? "team-surveys" : "survey-list");
+
+  /* " · 3 de 5 respondieron" para las encuestas de equipo */
+  function equipoCuenta(survey) {
+    const fila = ((state.equipoDatos && state.equipoDatos.formularios) || []).find((f) => f.id === survey.id);
+    return fila ? ` · ${fila.respondidas} de ${fila.equipo} respondieron` : "";
+  }
+
+  async function cargarEquipo() {
+    if (!sesion) return;
+    try {
+      state.equipoDatos = await DL.api.equipo(sesion.id);
+    } catch (error) {
+      state.equipoDatos = { equipo: [], formularios: [] };
+    }
+  }
+
+  function renderEncuestasEquipo() {
+    const datos = state.equipoDatos || { equipo: [], formularios: [] };
+    const lista = datos.formularios.slice().sort((a, b) => String(b.startsAt).localeCompare(String(a.startsAt)));
+    return `
+      <div class="dl-tabs">
+        <div class="dl-tabs-list">${tabsEncuestas("team-surveys")}</div>
+        <div class="dl-tabs-actions">
+          <button class="dl-tab-action dl-tab-action--primary" type="button" data-act="equipo-nueva">+ Nueva encuesta</button>
+        </div>
+      </div>
+      <p class="dl-muted equipo-nota">Encuestas libres para su equipo (${datos.equipo.length} persona${datos.equipo.length === 1 ? "" : "s"}): no se evalúa a nadie, cada quien la responde una vez desde "Mis encuestas" y usted ve las respuestas aquí.</p>
+      <section class="dl-card">
+        <div class="dl-table-wrap">
+          <table class="dl-table">
+            <thead><tr><th>Encuesta</th><th>Disponible</th><th>Preguntas</th><th>Respuestas</th><th>Estado</th><th class="dl-col-opts">Acción</th></tr></thead>
+            <tbody>
+              ${lista.length ? lista.map((f) => `
+                <tr class="dl-row-link" data-row-open="equipo-abrir" data-row-arg="${attr(f.id)}">
+                  <td><b>${esc(f.name || "Sin nombre")}</b>${f.description ? `<i class="equipo-desc">${esc(f.description)}</i>` : ""}</td>
+                  <td>${f.startsAt ? fmtFechaHora(f.startsAt) : "—"} a ${f.availableTo ? fmtFechaHora(f.availableTo) : "—"}</td>
+                  <td>${f.preguntas}</td>
+                  <td><span class="dl-badge ${f.respondidas ? "ok" : "off"}">${f.respondidas} de ${f.equipo}</span></td>
+                  <td><span class="dl-badge ${f.status === "Activa" && f.open ? "ok" : f.status === "Activa" ? "warn" : "off"}">${f.status !== "Activa" ? esc(f.status) : f.open ? "Recibe respuestas" : "Fuera de fecha"}</span></td>
+                  <td class="dl-col-opts">
+                    <button class="dl-mini" type="button" data-act="equipo-respuestas" data-arg="${attr(f.id)}">Ver respuestas</button>
+                    <button class="dl-mini" type="button" data-act="equipo-estado" data-arg="${attr(f.id)}">${f.status === "Activa" ? "Desactivar" : "Activar"}</button>
+                  </td>
+                </tr>`).join("") : `<tr><td colspan="6">Todavía no ha creado encuestas para su equipo. Use "Nueva encuesta".</td></tr>`}
+            </tbody>
+          </table>
+        </div>
+      </section>`;
+  }
+
   function renderBandejaInterna() {
     /* Si está respondiendo, se muestra la encuesta y nada más */
     if (state.respondiendo) return pantallaRespuesta();
 
-    const pendientes = state.bandeja.filter((i) => !i.respondida);
-    const hechas = state.bandeja.filter((i) => i.respondida);
+    const forms = (state.formsEquipo || []).map((f) => ({
+      libre: true,
+      surveyId: f.surveyId,
+      surveyName: f.surveyName,
+      subtype: "Encuesta de equipo",
+      period: f.availableTo ? `Hasta ${fmtFechaHora(f.availableTo)}` : "—",
+      supervisor: `Nadie · la envió ${f.owner}`,
+      preguntas: f.preguntas,
+      state: f.open ? "Pendiente" : "Cerrada",
+      respondida: f.respondida,
+      finishedAt: f.finishedAt || "",
+    }));
+    const pendientes = state.bandeja.filter((i) => !i.respondida).concat(forms.filter((f) => !f.respondida));
+    const hechas = state.bandeja.filter((i) => i.respondida).concat(forms.filter((f) => f.respondida));
 
     return `
       <div class="dl-tabs">
         <div class="dl-tabs-list">${tabsEncuestas("inbox")}</div>
       </div>
 
-      ${state.bandeja.length === 0
+      ${state.bandeja.length + forms.length === 0
         ? `<section class="dl-card">
              <div class="dl-table-wrap">
                <table class="dl-table"><tbody><tr><td colspan="6">No tiene encuestas asignadas.</td></tr></tbody></table>
@@ -2160,7 +2307,7 @@
                     <td>${esc(item.supervisor || "—")}</td>
                     <td>${item.preguntas}</td>
                     <td><span class="dl-badge warn">${esc(item.state)}</span></td>
-                    <td class="dl-col-opts"><button class="dl-mini" type="button" data-act="responder-bandeja" data-arg="${attr(item.instanceId)}">Responder</button></td>
+                    <td class="dl-col-opts"><button class="dl-mini" type="button" data-act="${item.libre ? "responder-equipo" : "responder-bandeja"}" data-arg="${attr(item.libre ? item.surveyId : item.instanceId)}">Responder</button></td>
                   </tr>`).join("")}
               </tbody>
             </table>
@@ -2208,7 +2355,7 @@
           </div>
           <div class="preview-device-body" id="bandejaMount"></div>
         </div>
-        <p class="dl-muted bandeja-nota">Respuestas anónimas.</p>
+        <p class="dl-muted bandeja-nota">${state.respondiendo.libre && !state.respondiendo.anonimo ? "Su nombre queda registrado con sus respuestas." : "Respuestas anónimas."}</p>
       </div>`;
   }
 
@@ -2225,10 +2372,11 @@
       works: [],
       respondent: instancia.doctor,
       onOpen() {
-        DL.api.abrirInstancia(instancia.id).catch(() => {});
+        if (instancia.id) DL.api.abrirInstancia(instancia.id).catch(() => {});
       },
       async onFinish(respuestas) {
-        await DL.api.responder(instancia.id, respuestas);
+        if (state.respondiendo && state.respondiendo.libre) await DL.api.responderLibre(encuesta.id, "", respuestas, sesion.id);
+        else await DL.api.responder(instancia.id, respuestas);
         showToast("¡Gracias! Sus respuestas quedaron registradas.");
         setTimeout(async () => {
           state.respondiendo = null;
@@ -2250,12 +2398,13 @@
                             fue el evaluado
      Quien no administra el módulo ve únicamente los dos últimos. */
   function tabsEncuestas(vista, total) {
-    const asignadas = (state.bandeja || []).filter((i) => !i.respondida).length;
+    const asignadas = (state.bandeja || []).filter((i) => !i.respondida).length + (state.formsEquipo || []).filter((f) => !f.respondida && f.open).length;
     const resultados = (state.misResultados || []).length;
     return `
       ${esAdmin() ? `<button class="dl-tab ${["survey-list", "survey-edit"].includes(vista) ? "is-active" : ""}" type="button" data-view="survey-list">Bandeja encuestas${total != null ? ` (${total})` : ""}</button>` : ""}
       <button class="dl-tab ${vista === "inbox" ? "is-active" : ""}" type="button" data-view="inbox">Mis encuestas${asignadas ? ` <i class="dl-pend">${asignadas}</i>` : ""}</button>
-      <button class="dl-tab ${vista === "my-results" ? "is-active" : ""}" type="button" data-view="my-results">Mis resultados${resultados ? ` (${resultados})` : ""}</button>`;
+      <button class="dl-tab ${vista === "my-results" ? "is-active" : ""}" type="button" data-view="my-results">Mis resultados${resultados ? ` (${resultados})` : ""}</button>
+      ${esJefe() ? `<button class="dl-tab ${vista === "team-surveys" ? "is-active" : ""}" type="button" data-view="team-surveys">Encuestas a mi equipo${state.equipoDatos ? ` (${state.equipoDatos.formularios.length})` : ""}</button>` : ""}`;
   }
 
   function renderSurveyList() {
@@ -2315,7 +2464,7 @@
                   const respondidas = survey._respondidas || 0;
                   return `
                     <tr class="dl-row-link" data-row-open="edit" data-row-arg="${esc(survey.id)}" title="Abrir la encuesta">
-                      <td><b>${esc(survey.name)}</b> <i>${esc(esLibre(survey) ? "Formulario libre" : survey.subtype)} · ${survey.sections.length} cat · ${preguntas} preg</i></td>
+                      <td><b>${esc(survey.name)}</b> <i>${esc(survey.ownerId ? `Encuesta de equipo de ${survey.ownerName || "un jefe"}` : esLibre(survey) ? "Formulario libre" : survey.subtype)} · ${survey.sections.length} cat · ${preguntas} preg</i></td>
                       <td><span class="dl-badge ${externa ? "pink" : ""}">${esc(survey.classification)}</span></td>
                       <td>${esc(esLibre(survey) ? "Cualquiera con el enlace" : survey.respondent)}</td>
                       ${esLibre(survey)
@@ -2456,7 +2605,7 @@
               </button>`).join("")}
           </div>
           <div class="stf-tabs-actions">
-            <button type="button" class="stf-tab-action" data-view="survey-list">${icoStf("back")} Regresar</button>
+            <button type="button" class="stf-tab-action" data-view="${volverLista()}">${icoStf("back")} Regresar</button>
             ${!state.esNueva && !editando ? `<button type="button" class="stf-tab-action stf-tab-action--primary" data-act="editar-encuesta">Editar</button>` : ""}
             ${!state.esNueva && editando ? `
               <button type="button" class="stf-tab-action" data-act="cancelar">Cancelar</button>
@@ -2473,8 +2622,8 @@
                 <span>Completa datos, preguntas y programación ${editando ? "para guardar la encuesta." : "para consultar la encuesta."}</span>
               </div>
               <div class="stf-actions">
-                <button type="button" class="stf-btn stf-btn--ghost" ${editando ? `data-act="cancelar"` : `data-view="survey-list"`}>${icoStf("x")} Cancelar</button>
-                ${editando ? `<button type="button" class="stf-btn stf-btn--primary" data-act="crear-encuesta">${icoStf("save")} ${state.esNueva ? (libre ? "Crear formulario" : "Crear encuesta") : "Guardar cambios"}</button>` : ""}
+                <button type="button" class="stf-btn stf-btn--ghost" ${editando ? `data-act="cancelar"` : `data-view="${volverLista()}"`}>${icoStf("x")} Cancelar</button>
+                ${editando ? `<button type="button" class="stf-btn stf-btn--primary" data-act="crear-encuesta">${icoStf("save")} ${state.esNueva ? (libre && !survey.ownerId ? "Crear formulario" : "Crear encuesta") : "Guardar cambios"}</button>` : ""}
               </div>
             </div>
           </div>`}
@@ -2507,8 +2656,10 @@
               placeholder="${libre ? "Ej: Inscripción a la actividad de fin de año" : "Ej: Evaluación de supervisor de producción"}">
           </div>
           <div class="stf-field stf-field--survey-mode">
-            <label>${state.esNueva ? "Modo de asignación *" : "Modo de asignación"}</label>
-            ${state.esNueva
+            <label>${state.esNueva && !survey.ownerId ? "Modo de asignación *" : "Modo de asignación"}</label>
+            ${survey.ownerId
+              ? `<div class="stf-readonly-text">${sesion && survey.ownerId === sesion.id ? "Encuesta libre para su equipo" : esc(`Encuesta libre para el equipo de ${survey.ownerName || "un jefe"}`)}</div>`
+              : state.esNueva
               ? `<select data-survey-field="assignMode" ${dis}>${opcionesPar(MODOS_INTERNOS, survey.assignMode)}</select>`
               : `<div class="stf-readonly-text">${esc((MODOS_INTERNOS.find(([v]) => v === survey.assignMode) || [, survey.assignMode])[1])}</div>`}
           </div>
@@ -2542,7 +2693,7 @@
               <div class="stf-setting-row">
                 <div class="stf-setting-row__copy">
                   <strong>Pedir nombre</strong>
-                  <span>Quien llene el formulario escribe su nombre. Si está apagado, las respuestas son anónimas.</span>
+                  <span>${survey.ownerId ? "Se guarda el nombre de quien responde." : "Quien llene el formulario escribe su nombre."} Si está apagado, las respuestas son anónimas.</span>
                 </div>
                 <span class="stf-switch ${survey.anonymous === false ? "is-checked" : ""}">
                   <input type="checkbox" data-int-nombre ${survey.anonymous === false ? "checked" : ""} ${dis}>
@@ -2603,7 +2754,9 @@
           <div class="stf-field stf-field--span-6">
             <label>Esquema de asignación</label>
             <div class="stf-readonly-text">${
-              libre
+              libre && survey.ownerId
+                ? "La responde su equipo desde \"Mis encuestas\" mientras esté disponible, una vez cada persona. No se evalúa a nadie."
+                : libre
                 ? "Cualquier persona con el enlace puede llenarlo mientras esté disponible. No se evalúa a nadie ni se relaciona con órdenes."
                 : supervisores
                   ? "La encuesta se asignará automáticamente según supervisor y subordinados."
@@ -2623,7 +2776,8 @@
       </section>`;
 
     let asignacion;
-    if (libre) asignacion = enlaceLibre(survey);
+    if (libre && survey.ownerId) asignacion = equipoLibre(survey);
+    else if (libre) asignacion = enlaceLibre(survey);
     else if (supervisores) asignacion = asignacionSupervisor(survey, supervisor);
     else asignacion = asignacionManual(survey);
 
@@ -2820,6 +2974,52 @@
       </section>`;
   }
 
+  /* Encuesta de un jefe: la responde su equipo directo, sin enlace público */
+  function equipoLibre(survey) {
+    const equipo = (state.equipoDatos && state.equipoDatos.equipo) || [];
+    const fila = ((state.equipoDatos && state.equipoDatos.formularios) || []).find((f) => f.id === survey.id);
+    const propia = sesion && survey.ownerId === sesion.id;
+    const suyo = propia ? "su equipo" : `el equipo de ${survey.ownerName || "su jefe"}`;
+    const abierto = state.intAcordeon;
+    return `
+      <section class="stf-assignment-box stf-libre-box">
+        <div class="stf-assignment-box__head"><h3>${icoStf("users", 16)} Quién la responde</h3></div>
+        <div class="stf-readonly-text">${state.esNueva
+          ? "Al crearla, le aparece a su equipo en \"Mis encuestas\" durante la disponibilidad."
+          : survey.status === "Activa"
+            ? `La ve ${suyo} en "Mis encuestas" mientras esté disponible.`
+            : `Está inactiva: ${suyo} no la ve hasta que se active.`}</div>
+        <div class="stf-assignment-summary">
+          <div class="stf-assignment-pill"><span class="stf-assignment-pill__label">Evaluado</span><span class="stf-assignment-pill__value">Nadie</span></div>
+          <div class="stf-assignment-pill"><span class="stf-assignment-pill__label">Responde</span><span class="stf-assignment-pill__value">${propia ? "Su equipo" : esc(`Equipo de ${survey.ownerName || "—"}`)} (${equipo.length})</span></div>
+          <div class="stf-assignment-pill"><span class="stf-assignment-pill__label">Respuestas</span><span class="stf-assignment-pill__value">${fila ? `${fila.respondidas} de ${fila.equipo}` : respuestasDe(survey)}</span></div>
+        </div>
+      </section>
+      <section class="stf-accordion-card stf-accordion-card--assignment">
+        <button type="button" class="stf-accordion-card__head ${abierto ? "is-open" : ""}" data-act="int-acordeon">
+          <div class="stf-accordion-card__left">
+            <div class="stf-accordion-card__title">Personas que responderán la encuesta</div>
+            <div class="stf-accordion-card__subtitle">${equipo.length} registro(s)</div>
+          </div>
+          <span class="stf-accordion-card__icon">${icoStf("right", 18)}</span>
+        </button>
+        ${abierto ? `
+          <div class="stf-accordion-card__body">
+            <div class="stf-datatable stf-datatable--responders">
+              <div class="stf-datatable__head stf-datatable__head--responders"><div>Nombre</div><div>Puesto</div><div>Área</div><div>Correo</div><div></div></div>
+              ${equipo.length ? equipo.map((emp) => `
+                <div class="stf-datatable__row stf-datatable__row--responders">
+                  <div class="stf-datatable__cell"><div class="stf-cell-readonly">${esc(emp.name)}</div></div>
+                  <div class="stf-datatable__cell"><div class="stf-cell-readonly">${esc(emp.position || "—")}</div></div>
+                  <div class="stf-datatable__cell"><div class="stf-cell-readonly">${esc(emp.area || "—")}</div></div>
+                  <div class="stf-datatable__cell"><div class="stf-cell-readonly">${esc(emp.email || "—")}</div></div>
+                  <div class="stf-datatable__cell"></div>
+                </div>`).join("") : `<div class="stf-datatable__empty">No tiene personas a cargo registradas.</div>`}
+            </div>
+          </div>` : ""}
+      </section>`;
+  }
+
   /* ---- Tab Preguntas: tabla del sistema ---- */
   function preguntasInternasTabla() {
     const survey = draft();
@@ -2917,9 +3117,9 @@
           <section class="dsv-rs-card dsv-rs-head">
             <div class="dsv-rs-head-top">
               <div>
-                <small class="dsv-rs-eyebrow">${esc(survey.name)} · Formulario libre</small>
+                <small class="dsv-rs-eyebrow">${esc(survey.name)} · ${survey.ownerId ? `Encuesta de equipo${equipoCuenta(survey)}` : "Formulario libre"}</small>
                 <h2>${plural(cuantas, "respuesta", "respuestas")}</h2>
-                <p class="dsv-rs-sub">${estado}${survey.status === "Activa" ? ` · <button type="button" class="dsv-rs-link is-small" data-act="libre-copiar">Copiar enlace</button>` : ""}</p>
+                <p class="dsv-rs-sub">${estado}${survey.status === "Activa" && !survey.ownerId ? ` · <button type="button" class="dsv-rs-link is-small" data-act="libre-copiar">Copiar enlace</button>` : ""}</p>
               </div>
               <button type="button" class="dsv-rs-link" data-act="doc-tab" data-arg="${tab === "table" ? "summary" : "table"}">${ico("sheet", 15)} ${tab === "table" ? "Volver al detalle" : "Ver en tabla"}</button>
             </div>
@@ -4924,7 +5124,7 @@ npm start</pre>` : ""}
 
   function renderResultadoDetalle() {
     const r = state.resultado;
-    const desdeAdmin = state.volverA !== "my-results";
+    const desdeAdmin = state.volverA === "results-list";
     if (!r) return `${desdeAdmin ? tabsResultados("internas") : ""}<div class="svy-gmdet__page"><div class="svy-gmdet__state-card">Cargando detalle…</div></div>`;
 
     const f = filtrosRes();
@@ -6517,9 +6717,11 @@ npm start</pre>` : ""}
     </div>`;
 
   /* ---------------- Internas: igual que el sistema ---------------- */
-  function dashInternas() {
+  /* Filas de internas con los filtros del tablero; las usa el gráfico y su detalle */
+  function internasVisibles() {
     const f = dashFiltros();
     const filas = (state.resultados || []).map((r) => ({
+      id: r.id,
       template: r.surveyName || "Encuesta",
       area: r.area || "—",
       supervisor: r.supervisor || "—",
@@ -6536,6 +6738,12 @@ npm start</pre>` : ""}
       (f.anio === "all" || Number(f.anio) === r.anio) &&
       (f.mes === "all" || Number(f.mes) === r.mes) &&
       (f.area === "all" || f.area === r.area));
+    return { filas, vis, termino };
+  }
+
+  function dashInternas() {
+    const f = dashFiltros();
+    const { filas, vis, termino } = internasVisibles();
 
     const asignadas = vis.reduce((t, r) => t + r.asignadas, 0);
     const respondidas = vis.reduce((t, r) => t + r.respondidas, 0);
@@ -6573,10 +6781,10 @@ npm start</pre>` : ""}
           ${campoSelect("Área", "area", f.area, [["all", "Todas"], ...areasOp.map((a) => [a, a])])}`, activos)}
         <div class="svy-dash__grid">
           ${tarjeta("trending", "Ranking de supervisores", ranking.length
-            ? `<div class="svy-dash__bars">${ranking.map((r, i) => barra({ rango: `#${i + 1}`, titulo: r.k, sub: etiquetaNota(r.v), valor: r.v.toFixed(2), ancho: (r.v / 5) * 100 })).join("")}</div>`
+            ? `<div class="svy-dash__bars">${ranking.map((r, i) => barra({ rango: `#${i + 1}`, titulo: r.k, sub: etiquetaNota(r.v), valor: r.v.toFixed(2), ancho: (r.v / 5) * 100, act: "dash-ver", arg: verArg("supervisor", r.k, r.v.toFixed(2)), tip: VER_TIP })).join("")}</div>`
             : `<div class="svy-dash__empty">No hay suficientes datos para generar el ranking.</div>`)}
           ${tarjeta("shield", "Distribución de resultados", `<div class="svy-dash__bars">${dist.map((d) => `
-            <div class="svy-dash__bar-row">
+            <div class="svy-dash__bar-row is-click" data-act="dash-ver" data-arg="${attr(verArg("dist", d.k, d.v))}" title="${VER_TIP}">
               <div class="svy-dash__tag tag-${d.k}">${d.label}</div>
               <div class="svy-dash__bar-track"><div class="svy-dash__bar-fill svy-dash__bar-fill-${d.k}" style="width:${(d.v / maxDist) * 100}%"></div></div>
               <div class="svy-dash__bar-value">${d.v}</div>
@@ -6585,13 +6793,13 @@ npm start</pre>` : ""}
             <div class="svy-dash__response">
               ${dona(tasa, "respuesta")}
               <div class="svy-dash__response-stats">
-                <div class="svy-dash__response-item"><div class="svy-dash__dot dot-answered"></div><div><strong>${respondidas}</strong><span>Respondidas</span></div></div>
-                <div class="svy-dash__response-item"><div class="svy-dash__dot dot-pending"></div><div><strong>${pendientes}</strong><span>No respondidas</span></div></div>
+                <div class="svy-dash__response-item is-click" data-act="dash-ver" data-arg="${attr(verArg("respondidas", "", respondidas))}" title="${VER_TIP}"><div class="svy-dash__dot dot-answered"></div><div><strong>${respondidas}</strong><span>Respondidas</span></div></div>
+                <div class="svy-dash__response-item is-click" data-act="dash-ver" data-arg="${attr(verArg("pendientes", "", pendientes))}" title="${VER_TIP}"><div class="svy-dash__dot dot-pending"></div><div><strong>${pendientes}</strong><span>No respondidas</span></div></div>
               </div>
             </div>`)}
           ${tarjeta("briefcase", "Promedio por área", areas.length
             ? `<div class="svy-dash__bars">${areas.map((a) => `
-              <div class="svy-dash__bar-row">
+              <div class="svy-dash__bar-row is-click" data-act="dash-ver" data-arg="${attr(verArg("area", a.k, a.v.toFixed(2)))}" title="${VER_TIP}">
                 <div class="svy-dash__bar-labels svy-dash__bar-labels-area"><div class="svy-dash__bar-main-label">${esc(a.k)}</div></div>
                 <div class="svy-dash__bar-track"><div class="svy-dash__bar-fill svy-dash__bar-fill-area" style="width:${(a.v / 5) * 100}%"></div></div>
                 <div class="svy-dash__bar-value">${a.v.toFixed(2)}</div>
@@ -6599,9 +6807,9 @@ npm start</pre>` : ""}
             : `<div class="svy-dash__empty">No hay suficientes datos por área.</div>`)}
         </div>
         <div class="svy-dash__summary">
-          <div class="svy-dash__summary-card"><span class="svy-dash__summary-label">Encuestas aplicadas</span><strong>${vis.length}</strong></div>
-          <div class="svy-dash__summary-card"><span class="svy-dash__summary-label">Colaboradores asignados</span><strong>${asignadas}</strong></div>
-          <div class="svy-dash__summary-card"><span class="svy-dash__summary-label">Respuestas recibidas</span><strong>${respondidas}</strong></div>
+          <div class="svy-dash__summary-card is-click" data-act="dash-ver" data-arg="${attr(verArg("aplicadas", "", vis.length))}" title="${VER_TIP}"><span class="svy-dash__summary-label">Encuestas aplicadas</span><strong>${vis.length}</strong></div>
+          <div class="svy-dash__summary-card is-click" data-act="dash-ver" data-arg="${attr(verArg("asignadas", "", asignadas))}" title="${VER_TIP}"><span class="svy-dash__summary-label">Colaboradores asignados</span><strong>${asignadas}</strong></div>
+          <div class="svy-dash__summary-card is-click" data-act="dash-ver" data-arg="${attr(verArg("respondidas", "", respondidas))}" title="${VER_TIP}"><span class="svy-dash__summary-label">Respuestas recibidas</span><strong>${respondidas}</strong></div>
         </div>
       </div>`;
   }
@@ -6623,8 +6831,8 @@ npm start</pre>` : ""}
     }
 
     const periodoTxt = f.dPeriodo !== "all" ? ((op.periods || []).find((p) => p.period === f.dPeriodo) || {}).periodLabel || f.dPeriodo : "Todos los períodos";
-    const kpi = (etiqueta, valor, sub = "", clase = "") => `
-      <div class="svy-dash__summary-card ${clase}"><span class="svy-dash__summary-label">${etiqueta}</span><strong>${valor}</strong>${sub ? `<small>${sub}</small>` : ""}</div>`;
+    const kpi = (etiqueta, valor, sub = "", clase = "", ver = "") => `
+      <div class="svy-dash__summary-card ${clase} ${ver ? "is-click" : ""}" ${ver ? `data-act="dash-ver" data-arg="${attr(ver)}" title="${VER_TIP}"` : ""}><span class="svy-dash__summary-label">${etiqueta}</span><strong>${valor}</strong>${sub ? `<small>${sub}</small>` : ""}</div>`;
 
     /* Tendencia: promedio (barra), % respuesta y % con atención (líneas) */
     const per = t.periods || [];
@@ -6634,7 +6842,7 @@ npm start</pre>` : ""}
       <div class="dsh-trend">
         <div class="dsh-trend-plot">
           ${per.map((p) => `
-            <button type="button" class="dsh-trend-col ${f.dPeriodo === p.period ? "is-sel" : ""}" data-act="dash-periodo" data-arg="${attr(p.period)}"
+            <button type="button" class="dsh-trend-col ${f.dPeriodo === p.period ? "is-sel" : ""}" data-act="dash-ver" data-arg="${attr(verArg("periodo", p.period, `${p.periodLabel}: promedio ${fmtProm(p.average)} · ${p.answered} de ${p.sent} respondieron`))}"
               title="${attr(`${p.periodLabel}: promedio ${fmtProm(p.average)} · ${p.answered} de ${p.sent} respondieron (${p.rate}%) · ${p.attention} con atención (${p.attentionRate}%)`)}">
               <span class="dsh-trend-val">${fmtProm(p.average, 1)}</span>
               <i class="svy-dash__bar-fill-${claseNota(p.average)}" style="height:${p.average ? (p.average / 5) * 100 : 0}%"></i>
@@ -6645,7 +6853,7 @@ npm start</pre>` : ""}
           </svg>
         </div>
         <div class="dsh-trend-labels">${per.map((p) => `<span>${esc(p.periodLabel.replace(/ \d{4}$/, ""))}<small>${p.rate}% resp.</small></span>`).join("")}</div>
-        <div class="dsh-leyenda"><span><i class="is-prom"></i>Promedio (barra)</span><span><i class="is-tasa"></i>% de respuesta</span><span><i class="is-atencion"></i>% con atención</span><span class="dsh-nota">Clic en un mes para filtrarlo</span></div>
+        <div class="dsh-leyenda"><span><i class="is-prom"></i>Promedio (barra)</span><span><i class="is-tasa"></i>% de respuesta</span><span><i class="is-atencion"></i>% con atención</span><span class="dsh-nota">Clic en un mes para ver sus respuestas</span></div>
       </div>`;
 
     /* Embudo: dónde se pierde la respuesta */
@@ -6657,10 +6865,13 @@ npm start</pre>` : ""}
       valor: v,
       ancho: fu.generated ? (v / fu.generated) * 100 : 0,
       clase: i === pasos.length - 1 ? "excellent" : "primary",
+      act: "dash-ver",
+      arg: verArg("embudo", ["generated", "sent", "delivered", "opened", "answered"][i], v),
+      tip: VER_TIP,
     })).join("")}</div>
       <div class="dsh-chips">
-        <button type="button" class="dsh-chip is-rojo" data-act="dash-ir-envios" title="Ver en Envíos">${t.waErrors} con error de WhatsApp</button>
-        <span class="dsh-chip">${t.expired} vencidas sin respuesta</span>
+        <button type="button" class="dsh-chip is-rojo" data-act="dash-ver" data-arg="${attr(verArg("wa-error", "", t.waErrors))}" title="${VER_TIP}">${t.waErrors} con error de WhatsApp</button>
+        <button type="button" class="dsh-chip" data-act="dash-ver" data-arg="${attr(verArg("vencidas", "", t.expired))}" title="${VER_TIP}">${t.expired} vencidas sin respuesta</button>
       </div>`;
 
     /* Calificaciones de 1 a 5 */
@@ -6671,13 +6882,13 @@ npm start</pre>` : ""}
     const estrellas = `
       <div class="dsh-hist">
         ${est.map((e) => `
-          <div class="dsh-hist-col" title="${attr(`${e.count} calificaciones de ${e.stars} estrella(s)`)}">
+          <div class="dsh-hist-col is-click" data-act="dash-ver" data-arg="${attr(verArg("estrellas", e.stars, e.count))}" title="${attr(`${e.count} calificaciones de ${e.stars} estrella(s). Clic para ver cuáles`)}">
             <span>${e.count}<small>${totalEst ? Math.round((e.count / totalEst) * 100) : 0}%</small></span>
             <i class="${e.stars <= 3 ? "is-baja" : ""}" style="height:${(e.count / maxEst) * 100}%"></i>
             <b>${"★".repeat(e.stars)}</b>
           </div>`).join("")}
       </div>
-      <div class="dsh-pie-nota"><b>${totalEst ? Math.round((bajas / totalEst) * 100) : 0}%</b> de las calificaciones son de 1 a 3 estrellas (${bajas} de ${totalEst}).</div>`;
+      <div class="dsh-pie-nota is-click" data-act="dash-ver" data-arg="${attr(verArg("bajas", "", bajas))}" title="${VER_TIP}"><b>${totalEst ? Math.round((bajas / totalEst) * 100) : 0}%</b> de las calificaciones son de 1 a 3 estrellas (<u>${bajas} de ${totalEst}</u>).</div>`;
 
     /* Tipo de evaluación (cómo prefieren evaluar los doctores) */
     const tipos = t.types || [];
@@ -6685,19 +6896,19 @@ npm start</pre>` : ""}
     const colTipo = { GENERAL: "#64748b", INDIVIDUAL: "#16a34a", MIXTA: "#7c3aed" };
     const tipoTxt = { GENERAL: "General", INDIVIDUAL: "Individual", MIXTA: "Mixta" };
     const tiposHtml = `
-      <div class="dsh-stack">${tipos.map((x) => `<i style="width:${(x.count / totalTipos) * 100}%;background:${colTipo[x.type]}" title="${attr(`${tipoTxt[x.type]}: ${x.count}`)}"></i>`).join("")}</div>
-      <div class="dsh-stack-ley">${tipos.map((x) => `<span><i style="background:${colTipo[x.type]}"></i>${tipoTxt[x.type]} <b>${x.count}</b> (${Math.round((x.count / totalTipos) * 100)}%)</span>`).join("")}</div>
+      <div class="dsh-stack">${tipos.map((x) => `<i class="is-click" data-act="dash-ver" data-arg="${attr(verArg("tipo", x.type, x.count))}" style="width:${(x.count / totalTipos) * 100}%;background:${colTipo[x.type]}" title="${attr(`${tipoTxt[x.type]}: ${x.count}. Clic para ver cuáles`)}"></i>`).join("")}</div>
+      <div class="dsh-stack-ley">${tipos.map((x) => `<span class="is-click" data-act="dash-ver" data-arg="${attr(verArg("tipo", x.type, x.count))}" title="${VER_TIP}"><i style="background:${colTipo[x.type]}"></i>${tipoTxt[x.type]} <b>${x.count}</b> (${Math.round((x.count / totalTipos) * 100)}%)</span>`).join("")}</div>
       <div class="dsh-pie-nota">Con Individual y Mixta se sabe qué orden falló; con General solo se conoce la opinión del mes.</div>`;
 
-    const areas = (t.areas || []).map((a) => barra({ titulo: a.area, sub: `${a.ratings} calificaciones · ${a.lowRate}% bajas`, valor: fmtProm(a.average), ancho: (a.average / 5) * 100, clase: claseNota(a.average), act: "dash-area", arg: a.area, tip: "Clic para filtrar por esta área" })).join("");
+    const areas = (t.areas || []).map((a) => barra({ titulo: a.area, sub: `${a.ratings} calificaciones · ${a.lowRate}% bajas`, valor: fmtProm(a.average), ancho: (a.average / 5) * 100, clase: claseNota(a.average), act: "dash-ver", arg: verArg("area", a.area, `${fmtProm(a.average)} · ${a.ratings} calificaciones`), tip: VER_TIP })).join("");
     const maxMot = Math.max(...(t.reasons || []).map((r) => r.count), 1);
     const motivos = (t.reasons || []).length
-      ? (t.reasons || []).map((r, i) => barra({ rango: `#${i + 1}`, titulo: r.reason, sub: `${r.share}% de los motivos`, valor: r.count, ancho: (r.count / maxMot) * 100, clase: "critical" })).join("")
+      ? (t.reasons || []).map((r, i) => barra({ rango: `#${i + 1}`, titulo: r.reason, sub: `${r.share}% de los motivos`, valor: r.count, ancho: (r.count / maxMot) * 100, clase: "critical", act: "dash-ver", arg: verArg("motivo", r.reason, `${r.count} veces`), tip: VER_TIP })).join("")
       : `<div class="svy-dash__empty">Sin calificaciones bajas con motivo.</div>`;
     const asesoras = (t.advisors || []).length
-      ? (t.advisors || []).map((a, i) => barra({ rango: `#${i + 1}`, titulo: a.advisor, sub: `${etiquetaNota(a.average)} · ${a.ratings} calif. · ${a.low} bajas`, valor: fmtProm(a.average), ancho: (a.average / 5) * 100, clase: claseNota(a.average) })).join("")
+      ? (t.advisors || []).map((a, i) => barra({ rango: `#${i + 1}`, titulo: a.advisor, sub: `${etiquetaNota(a.average)} · ${a.ratings} calif. · ${a.low} bajas`, valor: fmtProm(a.average), ancho: (a.average / 5) * 100, clase: claseNota(a.average), act: "dash-ver", arg: verArg("asesora", a.advisor, `${fmtProm(a.average)} · ${a.ratings} calificaciones`), tip: VER_TIP })).join("")
       : `<div class="svy-dash__empty">Sin órdenes evaluadas individualmente.</div>`;
-    const preguntas = (t.questions || []).map((q) => barra({ titulo: q.question, sub: `${esc(q.area)} · ${q.lowRate}% bajas`, valor: fmtProm(q.average), ancho: (q.average / 5) * 100, clase: claseNota(q.average) })).join("");
+    const preguntas = (t.questions || []).map((q) => barra({ titulo: q.question, sub: `${esc(q.area)} · ${q.lowRate}% bajas`, valor: fmtProm(q.average), ancho: (q.average / 5) * 100, clase: claseNota(q.average), act: "dash-ver", arg: verArg("pregunta", q.question, `${fmtProm(q.average)} · ${q.ratings} calificaciones`), tip: VER_TIP })).join("");
 
     const flecha = (v) => (v === null || v === undefined ? `<span class="dsh-tend">—</span>`
       : `<span class="dsh-tend ${v < 0 ? "is-baja" : v > 0 ? "is-sube" : ""}">${v < 0 ? "▼" : v > 0 ? "▲" : "="} ${Math.abs(v).toFixed(1)}</span>`);
@@ -6705,7 +6916,7 @@ npm start</pre>` : ""}
       <table class="dsh-tabla">
         <thead><tr><th>Doctor</th><th>Promedio</th><th>Último vs. anterior</th><th>Notas bajas</th><th>Respuestas</th><th></th></tr></thead>
         <tbody>${t.riskDoctors.map((d) => `
-          <tr>
+          <tr class="is-click" data-row-open="dash-ver" data-row-arg="${attr(verArg("doctor", d.doctorKey, `${fmtProm(d.average)} · ${d.responses} respuesta(s)`))}" title="${VER_TIP}">
             <td><b>${esc(d.doctor)}</b><small>${esc(d.doctorId)} · ${esc(d.clinic)}</small></td>
             <td><span class="dsh-nota-pill is-${claseNota(d.average)}">${fmtProm(d.average)}</span></td>
             <td>${flecha(d.trend)}</td>
@@ -6722,11 +6933,11 @@ npm start</pre>` : ""}
       <div class="svy-dash">
         ${filtros}
         <div class="dsh-kpis">
-          ${kpi("Encuestas enviadas", t.sent, `${t.doctors} doctores · ${esc(periodoTxt)}`)}
-          ${kpi("Respondidas", t.answered, `${t.rate}% de respuesta`)}
-          ${kpi("Promedio", `${fmtProm(t.average)} <em>/ 5</em>`, etiquetaNota(t.average), `is-${claseNota(t.average)}`)}
-          ${kpi("Requieren atención", t.attention, `${t.attentionRate}% de las respuestas`, t.attention ? "is-alerta" : "")}
-          ${kpi("WhatsApp con error", t.waErrors, "No recibieron la encuesta", t.waErrors ? "is-alerta" : "")}
+          ${kpi("Encuestas enviadas", t.sent, `${t.doctors} doctores · ${esc(periodoTxt)}`, "", verArg("enviadas", "", t.sent))}
+          ${kpi("Respondidas", t.answered, `${t.rate}% de respuesta`, "", verArg("respondidas", "", t.answered))}
+          ${kpi("Promedio", `${fmtProm(t.average)} <em>/ 5</em>`, etiquetaNota(t.average), `is-${claseNota(t.average)}`, verArg("promedio", "", fmtProm(t.average)))}
+          ${kpi("Requieren atención", t.attention, `${t.attentionRate}% de las respuestas`, t.attention ? "is-alerta" : "", verArg("atencion", "", t.attention))}
+          ${kpi("WhatsApp con error", t.waErrors, "No recibieron la encuesta", t.waErrors ? "is-alerta" : "", verArg("wa-error", "", t.waErrors))}
         </div>
         <div class="svy-dash__grid">
           ${tarjeta("trending", "Tendencia por período", tendencia, "is-ancha", "¿Mejora o empeora la satisfacción mes a mes, y responde más gente?")}
@@ -6738,6 +6949,229 @@ npm start</pre>` : ""}
           ${tarjeta("shield", "Preguntas con promedio más bajo", `<div class="svy-dash__bars">${preguntas}</div>`)}
           ${tarjeta("users", "Doctores a atender", riesgo, "is-ancha", "Los de promedio más bajo. Abra su última respuesta o su histórico para darles seguimiento.")}
           ${tarjeta("clipboard", "Tipo de evaluación", tiposHtml, "is-ancha")}
+        </div>
+      </div>`;
+  }
+
+  /* ---------------- Detalle de un gráfico ----------------
+     Cada barra, columna, fila o KPI del tablero abre aquí los registros
+     exactos que lo forman, con los mismos filtros, para comprobar que el
+     número del gráfico es correcto. Cada fila abre su respuesta. */
+  const VER_TIP = "Clic para ver las respuestas que forman este dato";
+  const verArg = (grafico, clave = "", esperado = "") => `${grafico}|${clave}|${esperado}`;
+  const NIVEL_DET = { general: "General", group: "En conjunto", work: "Por orden" };
+  const ESCALA_TXT = { excellent: "Excelente", good: "Bueno", regular: "Regular", critical: "Crítico" };
+  const PASO_TXT = { generated: "Generadas", sent: "Enviadas", delivered: "Entregadas por WhatsApp", opened: "Abrieron el enlace", answered: "Respondieron" };
+  const TIPO_TXT = { GENERAL: "General", INDIVIDUAL: "Individual", MIXTA: "Mixta" };
+
+  function tituloDetalle(d) {
+    const k = d.clave;
+    if (d.tab === "internas") {
+      return {
+        supervisor: ["Ranking de supervisores", k],
+        dist: ["Distribución de resultados", ESCALA_TXT[k] || k],
+        respondidas: ["Tasa de respuesta", "Respuestas recibidas"],
+        pendientes: ["Tasa de respuesta", "No respondidas"],
+        area: ["Promedio por área", k],
+        aplicadas: ["Resumen", "Encuestas aplicadas"],
+        asignadas: ["Resumen", "Colaboradores asignados"],
+      }[d.grafico] || ["Detalle", k];
+    }
+    const per = ((state.dashDoc || {}).periods || []).find((p) => p.period === k);
+    return {
+      enviadas: ["Indicadores", "Encuestas enviadas"],
+      respondidas: ["Indicadores", "Respondidas"],
+      promedio: ["Indicadores", "Promedio"],
+      atencion: ["Indicadores", "Requieren atención"],
+      "wa-error": ["Embudo de respuesta", "WhatsApp con error"],
+      vencidas: ["Embudo de respuesta", "Vencidas sin respuesta"],
+      periodo: ["Tendencia por período", per ? per.periodLabel : k],
+      embudo: ["Embudo de respuesta", PASO_TXT[k] || k],
+      estrellas: ["Calificaciones de 1 a 5", `${k} estrella${Number(k) === 1 ? "" : "s"}`],
+      bajas: ["Calificaciones de 1 a 5", "De 1 a 3 estrellas"],
+      area: ["Promedio por área", k],
+      motivo: ["Motivos de mejora", k],
+      asesora: ["Ranking de asesoras", k],
+      pregunta: ["Preguntas con promedio más bajo", k],
+      doctor: ["Doctores a atender", k],
+      tipo: ["Tipo de evaluación", TIPO_TXT[k] || k],
+    }[d.grafico] || ["Detalle", k];
+  }
+
+  /* Filas de internas detrás del gráfico, con los filtros del tablero */
+  function filasInternasDetalle(d) {
+    const { vis } = internasVisibles();
+    const con = vis.filter((r) => r.nota !== null);
+    const filas = {
+      supervisor: () => con.filter((r) => r.supervisor === d.clave),
+      dist: () => con.filter((r) => claseNota(r.nota) === d.clave),
+      respondidas: () => vis.filter((r) => r.respondidas > 0),
+      pendientes: () => vis.filter((r) => r.asignadas > r.respondidas),
+      area: () => con.filter((r) => r.area === d.clave),
+      aplicadas: () => vis,
+      asignadas: () => vis,
+    }[d.grafico];
+    return (filas ? filas() : []).slice().sort((a, b) => (b.anio * 100 + b.mes) - (a.anio * 100 + a.mes) || a.template.localeCompare(b.template));
+  }
+
+  /* Lo que el detalle suma, escrito igual que el dato del gráfico */
+  function calculadoDetalle(d, filas) {
+    const prom = (lista) => (lista.length ? lista.reduce((a, b) => a + b, 0) / lista.length : null);
+    if (d.tab === "internas") {
+      const notas = filas.filter((r) => r.nota !== null).map((r) => r.nota);
+      return {
+        supervisor: () => prom(notas).toFixed(2),
+        area: () => prom(notas).toFixed(2),
+        dist: () => String(filas.length),
+        aplicadas: () => String(filas.length),
+        asignadas: () => String(filas.reduce((t, r) => t + r.asignadas, 0)),
+        respondidas: () => String(filas.reduce((t, r) => t + r.respondidas, 0)),
+        pendientes: () => String(filas.reduce((t, r) => t + Math.max(r.asignadas - r.respondidas, 0), 0)),
+      }[d.grafico]();
+    }
+    const x = d.datos;
+    const per = ((state.dashDoc || {}).periods || []).find((p) => p.period === d.clave) || {};
+    return ({
+      promedio: () => fmtProm(x.average),
+      periodo: () => `${per.periodLabel}: promedio ${fmtProm(x.average)} · ${x.answered} de ${x.total} respondieron`,
+      area: () => `${fmtProm(x.average)} · ${x.total} calificaciones`,
+      asesora: () => `${fmtProm(x.average)} · ${x.total} calificaciones`,
+      pregunta: () => `${fmtProm(x.average)} · ${x.total} calificaciones`,
+      motivo: () => `${x.total} veces`,
+      doctor: () => `${fmtProm(x.average)} · ${x.total} respuesta(s)`,
+    }[d.grafico] || (() => String(x.total)))();
+  }
+
+  function renderDashDetalle() {
+    const d = state.dashDet;
+    if (!d) return `<div class="svy-dash"><div class="svy-dash__state">Elija un dato del tablero.</div></div>`;
+    const [grafico, elemento] = tituloDetalle(d);
+    const f = dashFiltros();
+    const doc = d.tab !== "internas";
+    const cabeza = (extra = "") => `
+      <div class="dsh-det-head">
+        <button type="button" class="dsv-rs-back" data-act="dash-det-volver">${ico("back")} Dashboard</button>
+        <div class="dsh-det-titulo">
+          <span>${esc(doc ? "Doctores" : "Internas")} · ${esc(grafico)}</span>
+          <h2>${esc(elemento || grafico)}</h2>
+          ${extra}
+        </div>
+      </div>`;
+    if (doc && !d.datos) return `<div class="svy-dash">${cabeza()}<div class="svy-dash__state">Cargando respuestas…</div></div>`;
+
+    /* Filtros que estaban puestos en el tablero */
+    const op = ((state.dashDoc || {}).options) || {};
+    const filtrosTxt = doc
+      ? [f.dPeriodo !== "all" && `Período: ${((op.periods || []).find((p) => p.period === f.dPeriodo) || {}).periodLabel || f.dPeriodo}`,
+         f.dEncuesta !== "all" && `Encuesta: ${((op.surveys || []).find((s) => s.id === f.dEncuesta) || {}).name || f.dEncuesta}`,
+         f.dArea !== "all" && `Área: ${f.dArea}`].filter(Boolean)
+      : [f.buscar && `Búsqueda: “${f.buscar}”`, f.anio !== "all" && `Año: ${f.anio}`, f.mes !== "all" && `Mes: ${MESES_RES[Number(f.mes) - 1]}`, f.area !== "all" && `Área: ${f.area}`].filter(Boolean);
+
+    const filas = doc ? d.datos.rows : filasInternasDetalle(d);
+    const calculado = calculadoDetalle(d, filas);
+    const coincide = String(calculado) === String(d.esperado);
+
+    const POR_PAGINA = 50;
+    const paginas = Math.max(1, Math.ceil(filas.length / POR_PAGINA));
+    const pagina = Math.min(Math.max(1, d.pagina || 1), paginas);
+    const inicio = (pagina - 1) * POR_PAGINA;
+    const pag = filas.slice(inicio, inicio + POR_PAGINA);
+
+    let cols = 0;
+    let cuerpo = "";
+    let tiles = "";
+    if (!doc) {
+      cols = 9;
+      const notas = filas.filter((r) => r.nota !== null).map((r) => r.nota);
+      const asig = filas.reduce((t, r) => t + r.asignadas, 0);
+      const resp = filas.reduce((t, r) => t + r.respondidas, 0);
+      tiles = `
+        <div><b>Encuestas</b><span>${filas.length}</span></div>
+        <div><b>Asignadas</b><span>${asig}</span></div>
+        <div><b>Respuestas</b><span>${resp} <small>(${asig ? Math.round((resp / asig) * 100) : 0}%)</small></span></div>
+        <div><b>Promedio</b><span>${notas.length ? (notas.reduce((a, b) => a + b, 0) / notas.length).toFixed(2) : "—"} <small>/ 5</small></span></div>`;
+      cuerpo = `
+        <thead><tr><th>Encuesta</th><th>Supervisor</th><th>Área</th><th>Período</th><th>Asignadas</th><th>Respuestas</th><th>Pendientes</th><th>Promedio</th><th aria-label="Abrir"></th></tr></thead>
+        <tbody>${pag.map((r) => `
+          <tr class="can-open" data-row-open="result-detail" data-row-arg="${attr(r.id)}" title="Ver el detalle">
+            <td>${esc(r.template)}</td>
+            <td>${esc(r.supervisor)}</td>
+            <td>${esc(r.area)}</td>
+            <td>${esc(r.periodo)}</td>
+            <td>${r.asignadas}</td>
+            <td>${r.respondidas}</td>
+            <td>${Math.max(r.asignadas - r.respondidas, 0)}</td>
+            <td>${r.nota === null ? "—" : `<b>${r.nota.toFixed(2)}</b> <small>${etiquetaNota(r.nota)}</small>`}</td>
+            <td class="dsv-rs-chev">${ico("right", 15)}</td>
+          </tr>`).join("")}</tbody>`;
+    } else if (d.datos.kind === "notas") {
+      cols = 9;
+      const x = d.datos;
+      tiles = `
+        <div><b>Calificaciones</b><span>${x.total}</span></div>
+        <div><b>Doctores</b><span>${x.doctors}</span></div>
+        <div><b>Promedio</b><span>${fmtProm(x.average)} <small>/ 5</small></span></div>
+        <div><b>De 1 a 3 estrellas</b><span>${x.low} <small>(${x.total ? Math.round((x.low / x.total) * 100) : 0}%)</small></span></div>`;
+      cuerpo = `
+        <thead><tr><th>Doctor</th><th>Período</th><th>Pregunta</th><th>Área</th><th>Evaluó</th><th>Asesora</th><th>Nota</th><th>Motivos / comentario</th><th aria-label="Abrir"></th></tr></thead>
+        <tbody>${pag.map((r) => `
+          <tr class="can-open" data-row-open="seg-detalle" data-row-arg="${attr(r.instanceId)}" title="Ver la respuesta completa">
+            <td>${esc(r.doctor)}<small class="dsh-det-sub">${esc(r.doctorId)}</small></td>
+            <td>${esc(r.periodLabel)}</td>
+            <td class="dsh-det-larga">${esc(r.question)}</td>
+            <td>${esc(r.area)}</td>
+            <td>${esc(NIVEL_DET[r.level] || r.level)}${r.orders.length ? `<small class="dsh-det-sub">${esc(r.orders.join(", "))}</small>` : ""}</td>
+            <td>${esc((r.advisors || []).join(", ") || "—")}</td>
+            <td class="dsh-det-nota">${estrellasLinea(r.score)} ${r.score}</td>
+            <td class="dsh-det-larga">${esc([(r.reasons || []).join(", "), r.comment].filter(Boolean).join(" · ") || "—")}</td>
+            <td class="dsv-rs-chev">${ico("right", 15)}</td>
+          </tr>`).join("")}</tbody>`;
+    } else {
+      cols = 10;
+      const x = d.datos;
+      tiles = `
+        <div><b>Encuestas</b><span>${x.total}</span></div>
+        <div><b>Respondidas</b><span>${x.answered} <small>(${x.total ? Math.round((x.answered / x.total) * 100) : 0}%)</small></span></div>
+        <div><b>Promedio</b><span>${fmtProm(x.average)} <small>/ 5</small></span></div>
+        <div><b>Requieren atención</b><span>${x.low}</span></div>`;
+      cuerpo = `
+        <thead><tr><th>Doctor</th><th>Encuesta</th><th>Período</th><th>Estado</th><th>WhatsApp</th><th>Enviada</th><th>Respondida</th><th>Tipo</th><th>Promedio</th><th aria-label="Abrir"></th></tr></thead>
+        <tbody>${pag.map((r) => `
+          <tr ${r.answered ? `class="can-open" data-row-open="seg-detalle" data-row-arg="${attr(r.instanceId)}" title="Ver la respuesta completa"` : ""}>
+            <td>${esc(r.doctor)}<small class="dsh-det-sub">${esc(r.doctorId)}${r.clinic ? ` · ${esc(r.clinic)}` : ""}</small></td>
+            <td>${esc(r.surveyName)}</td>
+            <td>${esc(r.periodLabel)}</td>
+            <td><span class="dsv-rs-pill ${r.answered ? "is-ok" : "is-off"}">${esc(r.status)}</span></td>
+            <td>${r.whatsapp === "Error" ? `<span class="dsh-det-error">Error</span>` : esc(r.whatsapp)}</td>
+            <td>${r.sentAt ? fmtFechaHora(r.sentAt) : "—"}</td>
+            <td>${r.answeredAt ? fmtFechaHora(r.answeredAt) : "—"}</td>
+            <td>${esc(TIPO_TXT[r.type] || "—")}</td>
+            <td>${r.average === null ? "—" : `${estrellasLinea(r.average)} ${fmtProm(r.average)}${r.attention ? ` <small class="dsh-det-error" title="Requiere atención">●</small>` : ""}`}</td>
+            <td class="dsv-rs-chev">${r.answered ? ico("right", 15) : ""}</td>
+          </tr>`).join("")}</tbody>`;
+    }
+
+    return `
+      <div class="dsv-page">
+        <div class="dsv-rs">
+          ${cabeza(`<p>${filtrosTxt.length ? `Con los filtros del tablero: ${esc(filtrosTxt.join(" · "))}` : "Sin filtros: todos los registros del tablero."}</p>`)}
+          <div class="dsh-det-check ${coincide ? "is-ok" : "is-mal"}">
+            ${ico(coincide ? "check" : "x", 14)}
+            <span>En el gráfico: <b>${esc(d.esperado)}</b></span>
+            <span>Con estas filas: <b>${esc(calculado)}</b></span>
+            <em>${coincide ? "Coincide" : "No coincide"}</em>
+          </div>
+          <section class="dsv-rs-card is-flush">
+            <table class="dsv-rs-mini is-clickable is-list">
+              ${cuerpo}
+              ${filas.length ? "" : `<tbody><tr><td colspan="${cols}">No hay registros detrás de este dato.</td></tr></tbody>`}
+            </table>
+            <div class="dl-table-foot">
+              <span>${filas.length === 0 ? "Sin registros" : `Mostrando ${inicio + 1} a ${Math.min(inicio + POR_PAGINA, filas.length)} de ${filas.length} registros`}</span>
+              ${paginador(pagina, paginas, "data-dash-pagina")}
+            </div>
+          </section>
+          <div class="dsv-rs-tiles is-list">${tiles}</div>
         </div>
       </div>`;
   }
@@ -6762,6 +7196,26 @@ npm start</pre>` : ""}
       case "dash-periodo":
         f.dPeriodo = f.dPeriodo === arg ? "all" : arg;
         break;
+      case "dash-ver": {
+        const partes = String(arg || "").split("|");
+        const grafico = partes[0];
+        const esperado = partes.length > 2 ? partes[partes.length - 1] : "";
+        const clave = partes.slice(1, -1).join("|");
+        state.dashDet = { tab: f.tab, grafico, clave, esperado, pagina: 1, datos: null };
+        state.view = "dash-detail";
+        state.module = "dashboard";
+        state.segPila = [];
+        renderApp();
+        window.scrollTo(0, 0);
+        if (f.tab !== "internas") {
+          state.dashDet.datos = await DL.api.detalleTablero({ periodo: f.dPeriodo, encuesta: f.dEncuesta, area: f.dArea, grafico, clave });
+          renderView();
+        }
+        return true;
+      }
+      case "dash-det-volver":
+        await irA("dashboard");
+        return true;
       case "dash-area":
         f.dArea = f.dArea === arg ? "all" : arg;
         break;

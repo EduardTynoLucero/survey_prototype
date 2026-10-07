@@ -493,6 +493,22 @@ const HISTORICO = FILAS_HISTORICO.map((fila, indice) => {
   };
 });
 
+/* Equipo de un jefe: quienes lo tienen como jefe inmediato */
+function equipoDe(id) {
+  const jefe = obtener(id);
+  if (!jefe) return [];
+  return listar()
+    .filter((e) => e.active !== false && e.id !== jefe.id && e.manager === jefe.name)
+    .sort((a, b) => a.name.localeCompare(b.name, "es"));
+}
+
+/* Jefe inmediato de una persona, o null */
+function jefeDe(id) {
+  const persona = obtener(id);
+  if (!persona || !persona.manager || persona.manager === persona.name) return null;
+  return listar().find((e) => e.name === persona.manager) || null;
+}
+
 const historico = () => HISTORICO;
 const historicoDe = (id) => HISTORICO.find((h) => h.id === id) || null;
 
@@ -517,6 +533,8 @@ module.exports = {
   subareasDe,
   nivelDe,
   respondedores,
+  equipoDe,
+  jefeDe,
   porIds,
   historico,
   historicoDe,
